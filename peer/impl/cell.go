@@ -12,7 +12,9 @@ const (
 	CellSize       = 512
 	CellPayloadLen = 509
 
-	RelayHeaderLen  = 11 // streamID + digest + length + command
+	// RelayHeaderLen is the size of the relay header inside a relay cell payload:
+	// StreamID (2) + Digest (6) + Length (2) + RelayCommand (1) = 11 bytes.
+	RelayHeaderLen  = 11
 	RelayPayloadLen = 498
 )
 
@@ -55,6 +57,8 @@ type RelayCell struct {
 	Data     []byte // <= RelayPayloadLen
 }
 
+// EncodeCell serializes a Cell into a fixed-size 512-byte buffer.
+// It writes CircID and Command, followed by the payload. Returns an error if binary encoding fails.
 func (n *node) EncodeCell(c Cell) ([CellSize]byte, error) {
 	var out [CellSize]byte
 	buf := bytes.NewBuffer(out[:0])
@@ -62,13 +66,13 @@ func (n *node) EncodeCell(c Cell) ([CellSize]byte, error) {
 	err := binary.Write(buf, binary.BigEndian, c.CircID)
 	if err != nil {
 		err := fmt.Errorf("failed to write circID: %w", err)
-		return [512]byte{}, err
+		return [CellSize]byte{}, err
 	}
 
 	err = binary.Write(buf, binary.BigEndian, c.Command)
 	if err != nil {
 		err := fmt.Errorf("failed to write Command: %w", err)
-		return [512]byte{}, err
+		return [CellSize]byte{}, err
 	}
 	buf.Write(c.Payload[:])
 
@@ -76,6 +80,8 @@ func (n *node) EncodeCell(c Cell) ([CellSize]byte, error) {
 	return out, nil
 }
 
+// DecodeCell converts a 512-byte buffer into a Cell.
+// Returns an error if header decoding fails or the payload is incomplete.
 func (n *node) DecodeCell(b [CellSize]byte) (Cell, error) {
 	var c Cell
 
@@ -102,6 +108,8 @@ func (n *node) DecodeCell(b [CellSize]byte) (Cell, error) {
 	return c, nil
 }
 
+// EncodeRelayCell wraps a RelayCell into a Cell with Command = Relay.
+// Returns an error if the relay data exceeds RelayPayloadLen.
 func (n *node) EncodeRelayCell(r RelayCell) (Cell, error) {
 	if len(r.Data) > RelayPayloadLen {
 		return Cell{}, fmt.Errorf("relay payload too large: %d", len(r.Data))
@@ -132,6 +140,8 @@ func (n *node) EncodeRelayCell(r RelayCell) (Cell, error) {
 	return c, nil
 }
 
+// DecodeRelayCell parses a RelayCell from a Cell payload.
+// Fails if decoding fails or the declared payload length is invalid.
 func (n *node) DecodeRelayCell(c Cell) (RelayCell, error) {
 	var r RelayCell
 	r.CircID = c.CircID
@@ -171,16 +181,23 @@ func (n *node) DecodeRelayCell(c Cell) (RelayCell, error) {
 	return r, nil
 }
 
+// -----------------------------------------------------------------------------
+// TorCellMessage
+
 type TorCellMessage struct {
-	Raw [512]byte
+	Raw [CellSize]byte
 }
 
+// NewEmpty implements types.Message.
 func (TorCellMessage) NewEmpty() types.Message { return &TorCellMessage{} }
 
+// Name implements types.Message.
 func (TorCellMessage) Name() string { return "torcell" }
 
+// String implements types.Message.
 func (t TorCellMessage) String() string { return fmt.Sprintf("{torcell %d bytes}", len(t.Raw)) }
 
+// HTML implements types.Message.
 func (t TorCellMessage) HTML() string {
 	return t.String()
 }
