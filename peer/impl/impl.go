@@ -45,6 +45,8 @@ func NewPeer(conf peer.Configuration) peer.Peer {
 	n.lastRecv = make(map[string]uint)
 	n.rumorStore = make(map[string]map[uint]transport.Message)
 	n.ackWaiter = make(map[string]*ackWait)
+	n.circuits = make(map[circuitKey]*Circuit)
+	n.clientCircuits = make(map[uint16]*ClientCircuit)
 
 	if conf.MessageRegistry != nil {
 		conf.MessageRegistry.RegisterMessageCallback(types.ChatMessage{}, n.execChatMessage)
@@ -97,6 +99,14 @@ type node struct {
 	// ack waiters by PacketID
 	ackMu     sync.Mutex
 	ackWaiter map[string]*ackWait
+
+	// Tor circuits (relay side)
+	circuitsMu sync.RWMutex
+	circuits   map[circuitKey]*Circuit
+
+	// Tor client circuits (OP side)
+	clientCircuitsMu sync.RWMutex
+	clientCircuits   map[uint16]*ClientCircuit
 }
 
 // Start implements peer.Service
@@ -294,17 +304,16 @@ func (n *node) ExecTorCell(m types.Message, pkt transport.Packet) error {
 		return err
 	}
 
-	switch cell.Command {
-	case Padding, Create, Created, Destroy:
-		return nil
-		// return n.HandleControlCell(cell, pkt.Header.Source)
+	src := pkt.Header.Source
 
+	switch cell.Command {
+	case Create:
+		return n.handleCreate(cell, src)
+	case Created:
+		return n.handleCreated(cell, src)
 	case Relay:
-		// relayCell, err := n.DecodeRelayCell(cell)
-		// if err != nil {
-		//	return err
-		// }
-		// return n.HandleRelayCell(relayCell, pkt.Header.Source)
+		return n.handleRelay(cell, src)
+	case Padding, Destroy:
 		return nil
 	}
 

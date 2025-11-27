@@ -1,9 +1,10 @@
 package peer
 
 import (
+	"time"
+
 	"go.dedis.ch/cs438/registry"
 	"go.dedis.ch/cs438/transport"
-	"time"
 )
 
 // Peer defines the interface of a peer in the Peerster system. It embeds all
@@ -11,6 +12,16 @@ import (
 type Peer interface {
 	Service
 	Messaging
+	Tor
+}
+
+// Tor defines the interface for Tor-like onion routing functionality.
+type Tor interface {
+	// BuildCircuit creates a 3-hop circuit through the specified relay nodes.
+	// hops must contain exactly 3 addresses: [Guard, Middle, Exit].
+	// Blocks until the circuit is ready or timeout.
+	// Returns the circuit ID on success.
+	BuildCircuit(hops [3]string, timeout time.Duration) (uint16, error)
 }
 
 // Factory is the type of function we are using to create new instances of
