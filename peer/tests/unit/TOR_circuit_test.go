@@ -8,8 +8,8 @@ import (
 	z "go.dedis.ch/cs438/internal/testing"
 )
 
-// Test_Circuit_Create_Simple tests that a single Create/Created handshake works
-func Test_Circuit_Create_Simple(t *testing.T) {
+// Test_TOR_Circuit_Create_Simple tests that a single Create/Created handshake works
+func Test_TOR_Circuit_Create_Simple(t *testing.T) {
 	transp := channelFac()
 
 	// Create two nodes: client and relay
@@ -32,8 +32,8 @@ func Test_Circuit_Create_Simple(t *testing.T) {
 	require.NotEmpty(t, relay.GetAddr())
 }
 
-// Test_Circuit_BuildCircuit_ThreeHops tests building a complete 3-hop circuit
-func Test_Circuit_BuildCircuit_ThreeHops(t *testing.T) {
+// Test_TOR_Circuit_BuildCircuit_ThreeHops tests building a complete 3-hop circuit
+func Test_TOR_Circuit_BuildCircuit_ThreeHops(t *testing.T) {
 	transp := channelFac()
 
 	// Create 4 nodes: client + 3 relays (guard, middle, exit)
@@ -72,8 +72,8 @@ func Test_Circuit_BuildCircuit_ThreeHops(t *testing.T) {
 	t.Logf("Successfully built circuit %d through %v", circID, hops)
 }
 
-// Test_Circuit_BuildCircuit_Timeout tests that circuit building fails properly with unreachable nodes
-func Test_Circuit_BuildCircuit_Timeout(t *testing.T) {
+// Test_TOR_Circuit_BuildCircuit_Timeout tests that circuit building fails properly with unreachable nodes
+func Test_TOR_Circuit_BuildCircuit_Timeout(t *testing.T) {
 	transp := channelFac()
 
 	// Create only the client - no relays available
@@ -94,8 +94,8 @@ func Test_Circuit_BuildCircuit_Timeout(t *testing.T) {
 	require.Error(t, err, "BuildCircuit should fail with unreachable nodes")
 }
 
-// Test_Circuit_MultipleCircuits tests building multiple circuits concurrently
-func Test_Circuit_MultipleCircuits(t *testing.T) {
+// Test_TOR_Circuit_MultipleCircuits tests building multiple circuits concurrently
+func Test_TOR_Circuit_MultipleCircuits(t *testing.T) {
 	transp := channelFac()
 
 	// Create nodes
