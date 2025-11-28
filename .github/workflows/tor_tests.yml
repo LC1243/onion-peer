@@ -1,0 +1,23 @@
+name: Tor Tests
+
+on:
+  push:
+    branches: [main, circuit-creation]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test_tor:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Use Go 1.23
+        uses: actions/setup-go@v3
+        with:
+          go-version: '=1.23'
+        id: go
+
+      - name: Check out code
+        uses: actions/checkout@v3
+
+      - name: Run Tor tests
+        run: make test_tor
