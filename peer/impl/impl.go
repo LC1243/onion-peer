@@ -308,11 +308,11 @@ func (n *node) ExecTorCell(m types.Message, pkt transport.Packet) error {
 
 	switch cell.Command {
 	case Create:
-		return n.handleCreate(cell, src)
+		return n.HandleCreate(cell, src)
 	case Created:
-		return n.handleCreated(cell, src)
+		return n.HandleCreated(cell, src)
 	case Relay:
-		return n.handleRelay(cell, src)
+		return n.HandleRelay(cell, src)
 	case Padding, Destroy:
 		return nil
 	}

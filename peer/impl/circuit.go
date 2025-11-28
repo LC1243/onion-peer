@@ -46,12 +46,14 @@ type ClientCircuit struct {
 // -----------------------------------------------------------------------------
 // Tor Circuit Handlers
 
-func (n *node) handleCreate(cell Cell, src string) error {
+// HandleCreate handles a Create cell
+func (n *node) HandleCreate(cell Cell, src string) error {
 	n.circuitsMu.Lock()
 	defer n.circuitsMu.Unlock()
 
 	key := circuitKey{PrevHop: src, InCircID: cell.CircID}
-	if _, exists := n.circuits[key]; exists {
+	_, exists := n.circuits[key]
+	if exists {
 		return nil
 	}
 
@@ -70,17 +72,18 @@ func (n *node) handleCreate(cell Cell, src string) error {
 		CircID:  cell.CircID,
 		Command: Created,
 	}
-	return n.sendCell(src, reply)
+	return n.SendCell(src, reply)
 }
 
-func (n *node) handleCreated(cell Cell, src string) error {
+// HandleCreated handles a Created cell
+func (n *node) HandleCreated(cell Cell, src string) error {
 	// First, check if this is for a client circuit (OP case)
 	n.clientCircuitsMu.RLock()
 	_, isClientCircuit := n.clientCircuits[cell.CircID]
 	n.clientCircuitsMu.RUnlock()
 
 	if isClientCircuit {
-		return n.handleCreatedAsOP(cell, src)
+		return n.HandleCreatedAsOP(cell, src)
 	}
 
 	// Otherwise, it's a relay circuit
@@ -114,40 +117,49 @@ func (n *node) handleCreated(cell Cell, src string) error {
 		if err != nil {
 			return err
 		}
-		return n.sendCell(targetCirc.PrevHop, cellToSend)
+		return n.SendCell(targetCirc.PrevHop, cellToSend)
 	}
 
 	return nil
 }
 
-func (n *node) handleRelay(cell Cell, src string) error {
+// HandleRelay handles a Relay cell
+func (n *node) HandleRelay(cell Cell, src string) error {
 	// First, check if this is for a client circuit (OP receiving relay cells)
 	n.clientCircuitsMu.RLock()
 	cc, isClientCircuit := n.clientCircuits[cell.CircID]
 	n.clientCircuitsMu.RUnlock()
 
 	if isClientCircuit {
-		// OP receiving a relay cell back from the circuit
-		relayCell, err := n.DecodeRelayCell(cell)
-		if err != nil {
-			return err
-		}
-
-		// Verify it came from our guard
-		if src != cc.Hops[0] {
-			return fmt.Errorf("relay cell from unexpected source %s (expected %s)", src, cc.Hops[0])
-		}
-
-		switch relayCell.Command {
-		case RelayExtended:
-			return n.handleRelayExtendedAsOP(cell.CircID)
-		default:
-			return fmt.Errorf("unexpected relay command %d for client circuit", relayCell.Command)
-		}
+		return n.HandleRelayAsOP(cell, src, cc)
 	}
 
-	// Otherwise, it's a relay circuit
-	// Try to find circuit where src is PrevHop (cell going forward)
+	return n.HandleRelayForwarding(cell, src)
+}
+
+// HandleRelayAsOP handles a relay cell when acting as OP
+func (n *node) HandleRelayAsOP(cell Cell, src string, cc *ClientCircuit) error {
+	// OP receiving a relay cell back from the circuit
+	relayCell, err := n.DecodeRelayCell(cell)
+	if err != nil {
+		return err
+	}
+
+	// Verify it came from our guard
+	if src != cc.Hops[0] {
+		return fmt.Errorf("relay cell from unexpected source %s (expected %s)", src, cc.Hops[0])
+	}
+
+	switch relayCell.Command {
+	case RelayExtended:
+		return n.HandleRelayExtendedAsOP(cell.CircID)
+	default:
+		return fmt.Errorf("unexpected relay command %d for client circuit", relayCell.Command)
+	}
+}
+
+// HandleRelayForwarding handles a relay cell when acting as a relay
+func (n *node) HandleRelayForwarding(cell Cell, src string) error {
 	n.circuitsMu.RLock()
 	key := circuitKey{PrevHop: src, InCircID: cell.CircID}
 	circ, exists := n.circuits[key]
@@ -170,38 +182,47 @@ func (n *node) handleRelay(cell Cell, src string) error {
 
 	// Determine direction: is this coming from PrevHop or NextHop?
 	if src == circ.PrevHop {
-		// Cell is going forward (from PrevHop towards NextHop)
-		if circ.NextHop == "" {
-			// We are the end of the circuit, process the relay command
-			relayCell, err := n.DecodeRelayCell(cell)
-			if err != nil {
-				return err
-			}
-
-			switch relayCell.Command {
-			case RelayExtend:
-				return n.handleRelayExtend(relayCell, circ)
-			case RelayExtended:
-				return n.handleRelayExtended(relayCell, circ)
-			default:
-				return fmt.Errorf("unknown relay command %d", relayCell.Command)
-			}
-		} else {
-			// Forward to NextHop
-			cell.CircID = circ.OutCircID
-			return n.sendCell(circ.NextHop, cell)
-		}
+		return n.HandleForwardRelay(cell, circ)
 	} else if src == circ.NextHop {
-		// Cell is coming back (from NextHop towards PrevHop)
-		// Forward to PrevHop with the InCircID
-		cell.CircID = circ.InCircID
-		return n.sendCell(circ.PrevHop, cell)
+		return n.HandleBackwardRelay(cell, circ)
 	}
 
 	return fmt.Errorf("relay cell from unexpected source %s", src)
 }
 
-func (n *node) handleRelayExtend(relayCell RelayCell, circ *Circuit) error {
+// HandleForwardRelay handles a relay cell going forward (PrevHop -> NextHop)
+func (n *node) HandleForwardRelay(cell Cell, circ *Circuit) error {
+	if circ.NextHop == "" {
+		// We are the end of the circuit, process the relay command
+		relayCell, err := n.DecodeRelayCell(cell)
+		if err != nil {
+			return err
+		}
+
+		switch relayCell.Command {
+		case RelayExtend:
+			return n.HandleRelayExtend(relayCell, circ)
+		case RelayExtended:
+			return n.HandleRelayExtended(relayCell, circ)
+		default:
+			return fmt.Errorf("unknown relay command %d", relayCell.Command)
+		}
+	}
+
+	// Forward to NextHop
+	cell.CircID = circ.OutCircID
+	return n.SendCell(circ.NextHop, cell)
+}
+
+// HandleBackwardRelay handles a relay cell going backward (NextHop -> PrevHop)
+func (n *node) HandleBackwardRelay(cell Cell, circ *Circuit) error {
+	// Forward to PrevHop with the InCircID
+	cell.CircID = circ.InCircID
+	return n.SendCell(circ.PrevHop, cell)
+}
+
+// HandleRelayExtend handles a RelayExtend command
+func (n *node) HandleRelayExtend(relayCell RelayCell, circ *Circuit) error {
 	target := string(relayCell.Data)
 	if target == "" {
 		return errors.New("empty target in RelayExtend")
@@ -235,15 +256,17 @@ func (n *node) handleRelayExtend(relayCell RelayCell, circ *Circuit) error {
 		CircID:  newID,
 		Command: Create,
 	}
-	return n.sendCell(target, createCell)
+	return n.SendCell(target, createCell)
 }
 
-func (n *node) handleRelayExtended(relayCell RelayCell, circ *Circuit) error {
+// HandleRelayExtended handles a RelayExtended command
+func (n *node) HandleRelayExtended(_ RelayCell, _ *Circuit) error {
 	n.log.Info().Msg("Circuit extension confirmed (RelayExtended)")
 	return nil
 }
 
-func (n *node) sendCell(dest string, cell Cell) error {
+// SendCell sends a cell to a destination
+func (n *node) SendCell(dest string, cell Cell) error {
 	encoded, err := n.EncodeCell(cell)
 	if err != nil {
 		return err
@@ -274,7 +297,7 @@ func (n *node) BuildCircuit(hops [3]string, timeout time.Duration) (uint16, erro
 	}
 
 	// Generate a unique circuit ID for the first hop
-	circID := n.generateClientCircuitID()
+	circID := n.GenerateClientCircuitID()
 
 	// Create the client circuit state
 	cc := &ClientCircuit{
@@ -300,8 +323,9 @@ func (n *node) BuildCircuit(hops [3]string, timeout time.Duration) (uint16, erro
 		CircID:  circID,
 		Command: Create,
 	}
-	if err := n.sendCell(hops[0], createCell); err != nil {
-		n.cleanupClientCircuit(circID)
+	err := n.SendCell(hops[0], createCell)
+	if err != nil {
+		n.CleanupClientCircuit(circID)
 		return 0, fmt.Errorf("failed to send Create to guard: %w", err)
 	}
 
@@ -313,36 +337,38 @@ func (n *node) BuildCircuit(hops [3]string, timeout time.Duration) (uint16, erro
 		}
 		return circID, nil
 	case <-time.After(timeout):
-		n.cleanupClientCircuit(circID)
+		n.CleanupClientCircuit(circID)
 		return 0, errors.New("circuit creation timed out")
 	case <-n.stopCh:
-		n.cleanupClientCircuit(circID)
+		n.CleanupClientCircuit(circID)
 		return 0, errors.New("node stopped during circuit creation")
 	}
 }
 
-// generateClientCircuitID generates a unique circuit ID for client circuits
-func (n *node) generateClientCircuitID() uint16 {
+// GenerateClientCircuitID generates a unique circuit ID for client circuits
+func (n *node) GenerateClientCircuitID() uint16 {
 	n.clientCircuitsMu.RLock()
 	defer n.clientCircuitsMu.RUnlock()
 
 	for {
 		id := uint16(rand.Intn(65535) + 1)
-		if _, exists := n.clientCircuits[id]; !exists {
+		exists := false
+		_, exists = n.clientCircuits[id]
+		if !exists {
 			return id
 		}
 	}
 }
 
-// cleanupClientCircuit removes a client circuit from the map
-func (n *node) cleanupClientCircuit(circID uint16) {
+// CleanupClientCircuit removes a client circuit from the map
+func (n *node) CleanupClientCircuit(circID uint16) {
 	n.clientCircuitsMu.Lock()
 	delete(n.clientCircuits, circID)
 	n.clientCircuitsMu.Unlock()
 }
 
-// handleCreatedAsOP handles a Created cell when this node is the OP
-func (n *node) handleCreatedAsOP(cell Cell, src string) error {
+// HandleCreatedAsOP handles a Created cell when this node is the OP
+func (n *node) HandleCreatedAsOP(cell Cell, src string) error {
 	n.clientCircuitsMu.Lock()
 	defer n.clientCircuitsMu.Unlock()
 
@@ -357,14 +383,14 @@ func (n *node) handleCreatedAsOP(cell Cell, src string) error {
 		cc.State = CircuitStateExtending1
 		n.log.Info().Uint16("circID", cell.CircID).Msg("Guard connected, extending to Middle")
 
-		return n.sendExtendToHop(cc, cc.Hops[1])
+		return n.SendExtendToHop(cc, cc.Hops[1])
 	}
 
 	return fmt.Errorf("unexpected Created in state %d from %s", cc.State, src)
 }
 
-// handleRelayExtendedAsOP handles a RelayExtended cell when this node is the OP
-func (n *node) handleRelayExtendedAsOP(circID uint16) error {
+// HandleRelayExtendedAsOP handles a RelayExtended cell when this node is the OP
+func (n *node) HandleRelayExtendedAsOP(circID uint16) error {
 	n.clientCircuitsMu.Lock()
 	defer n.clientCircuitsMu.Unlock()
 
@@ -378,7 +404,7 @@ func (n *node) handleRelayExtendedAsOP(circID uint16) error {
 		// Middle responded, now extend to Exit
 		cc.State = CircuitStateExtending2
 		n.log.Info().Uint16("circID", circID).Msg("Middle connected, extending to Exit")
-		return n.sendExtendToHop(cc, cc.Hops[2])
+		return n.SendExtendToHop(cc, cc.Hops[2])
 
 	case CircuitStateExtending2:
 		// Exit responded, circuit is ready!
@@ -387,13 +413,16 @@ func (n *node) handleRelayExtendedAsOP(circID uint16) error {
 		close(cc.ReadyChan)
 		return nil
 
+	case CircuitStateCreating, CircuitStateReady, CircuitStateFailed:
+		return fmt.Errorf("unexpected RelayExtended in state %d", cc.State)
+
 	default:
 		return fmt.Errorf("unexpected RelayExtended in state %d", cc.State)
 	}
 }
 
-// sendExtendToHop sends a RelayExtend cell to extend the circuit to the next hop
-func (n *node) sendExtendToHop(cc *ClientCircuit, nextHop string) error {
+// SendExtendToHop sends a RelayExtend cell to extend the circuit to the next hop
+func (n *node) SendExtendToHop(cc *ClientCircuit, nextHop string) error {
 	// TODO: When crypto is added, encrypt the relay cell with layers for each hop
 
 	relayCell := RelayCell{
@@ -410,5 +439,5 @@ func (n *node) sendExtendToHop(cc *ClientCircuit, nextHop string) error {
 	}
 
 	// Send to the Guard (first hop) - it will forward through the circuit
-	return n.sendCell(cc.Hops[0], cell)
+	return n.SendCell(cc.Hops[0], cell)
 }
