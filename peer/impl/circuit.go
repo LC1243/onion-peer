@@ -441,3 +441,27 @@ func (n *node) SendExtendToHop(cc *ClientCircuit, nextHop string) error {
 	// Send to the Guard (first hop) - it will forward through the circuit
 	return n.SendCell(cc.Hops[0], cell)
 }
+
+// DestroyCircuitAsClient start or relay circuit teardown as a client node
+func (n *node) DestroyCircuitAsClient(circID uint16) error {
+	n.clientCircuitsMu.Lock()
+	cc, exists := n.clientCircuits[circID]
+	defer n.clientCircuitsMu.Unlock()
+	if !exists {
+		return fmt.Errorf("cannot destroy unknown client circuit %d", circID)
+	}
+
+	if cc.State != CircuitStateReady {
+		return nil // For now return if circuit not ready, later we can block (wait for circuit to be created)
+	}
+
+	destroyCell := Cell{
+		CircID:  circID,
+		Command: Destroy,
+	}
+	_ = n.SendCell(cc.Hops[0], destroyCell) // Ignore send cell error, destroy circuit resources anyway
+
+	n.CleanupClientCircuit(circID)
+	n.log.Info().Msgf("Destroyed client circuit %d", circID)
+	return nil
+}
