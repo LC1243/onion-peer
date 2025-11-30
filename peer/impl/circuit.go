@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"math/rand"
 	"time"
+
+	"github.com/rs/zerolog/log"
 )
 
 // Circuit represents a relay-side circuit state
@@ -458,7 +460,7 @@ func (n *node) DestroyCircuit(circID uint16) error {
 func destroyCircuitAsClient(n *node, initiator bool, circID uint16) error {
 	n.clientCircuitsMu.Lock()
 	cc, exists := n.clientCircuits[circID]
-	defer n.clientCircuitsMu.Unlock()
+	n.clientCircuitsMu.Unlock()
 	if !exists {
 		return fmt.Errorf("cannot destroy unknown client circuit %d", circID)
 	}
@@ -474,8 +476,9 @@ func destroyCircuitAsClient(n *node, initiator bool, circID uint16) error {
 		}
 		_ = n.SendCell(cc.Hops[0], destroyCell) // Ignore send cell error, destroy circuit resources anyway
 	}
-
+	log.Debug().Msg("HERE :)")
 	n.CleanupClientCircuit(circID)
+	log.Debug().Msg("HERE TOO :)")
 	addr := n.conf.Socket.GetAddress()
 	n.log.Info().Str("peer", addr).Uint16("circID", circID).Msg("Destroyed circuit")
 	return nil
