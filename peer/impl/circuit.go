@@ -462,6 +462,36 @@ func (n *node) RelayDestroyCircuit(circID uint16, src string) error {
 	return destroyCircuitAsRelay(n, true, circID, src)
 }
 
+// CleanupAllCircuits destroys all circuits (client and relay) managed by this node
+func (n *node) CleanupAllCircuits() {
+	var circID []uint16
+	n.clientCircuitsMu.RLock()
+	for id := range n.clientCircuits {
+		circID = append(circID, id)
+	}
+	n.clientCircuitsMu.RUnlock()
+
+	// Destroy all client circuits
+	for _, id := range circID {
+		_ = destroyCircuitAsClient(n, true, id)
+	}
+
+	var circuitKeys []circuitKey
+	n.circuitsMu.RLock()
+	for key := range n.circuits {
+		circuitKeys = append(circuitKeys, key)
+	}
+	n.circuitsMu.RUnlock()
+
+	// Destroy all relay circuits
+	for _, key := range circuitKeys {
+		_ = destroyCircuitAsRelay(n, true, key.InCircID, key.PrevHop)
+	}
+
+	addr := n.conf.Socket.GetAddress()
+	n.log.Info().Str("peer", addr).Msg("Cleaned up all circuits")
+}
+
 // DestroyCircuitAsClient start or relay circuit teardown as a client node
 func destroyCircuitAsClient(n *node, initiator bool, circID uint16) error {
 	n.clientCircuitsMu.Lock()
