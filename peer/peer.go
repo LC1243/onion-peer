@@ -22,7 +22,16 @@ type Tor interface {
 	// Blocks until the circuit is ready or timeout.
 	// Returns the circuit ID on success.
 	BuildCircuit(hops [3]string, timeout time.Duration) (uint16, error)
+
+	// DestroyCircuit tears down the circuit with the given ID.
+	// Returns an error if the circuit does not exist or teardown fails.
 	DestroyCircuit(circuitID uint16) error
+
+	// GetCircuitsNbr returns the number of active relay circuits managed by the peer.
+	GetCircuitsNbr() int
+
+	// GetClientCircuitsNbr returns the number of active client circuits managed by the peer.
+	GetClientCircuitsNbr() int
 }
 
 // Factory is the type of function we are using to create new instances of

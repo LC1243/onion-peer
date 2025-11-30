@@ -525,3 +525,17 @@ func (n *node) HandleDestroy(cell Cell, src string) error {
 	}
 	return destroyCircuitAsRelay(n, false, cell.CircID, src)
 }
+
+// GetCircuitsNbr returns the number of relay circuits (for testing)
+func (n *node) GetCircuitsNbr() int {
+	n.circuitsMu.RLock()
+	defer n.circuitsMu.RUnlock()
+	return len(n.circuits)
+}
+
+// GetClientCircuitsNbr returns the number of client circuits (for testing)
+func (n *node) GetClientCircuitsNbr() int {
+	n.clientCircuitsMu.RLock()
+	defer n.clientCircuitsMu.RUnlock()
+	return len(n.clientCircuits)
+}
