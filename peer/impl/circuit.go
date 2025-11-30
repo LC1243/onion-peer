@@ -476,7 +476,8 @@ func destroyCircuitAsClient(n *node, initiator bool, circID uint16) error {
 	}
 
 	n.CleanupClientCircuit(circID)
-	n.log.Info().Msgf("Destroyed client circuit %d", circID)
+	addr := n.conf.Socket.GetAddress()
+	n.log.Info().Str("peer", addr).Uint16("circID", circID).Msg("Destroyed circuit")
 	return nil
 }
 
@@ -504,7 +505,8 @@ func destroyCircuitAsRelay(n *node, initiator bool, circID uint16, src string) e
 	n.circuitsMu.Lock()
 	delete(n.circuits, key)
 	n.circuitsMu.Unlock()
-	n.log.Info().Msgf("Destroyed relay circuit %d", circID)
+	addr := n.conf.Socket.GetAddress()
+	n.log.Info().Str("peer", addr).Uint16("circID", circID).Msg("Destroyed relay")
 	return nil
 }
 
