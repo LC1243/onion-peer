@@ -458,7 +458,7 @@ func (n *node) DestroyCircuit(circID uint16) error {
 func destroyCircuitAsClient(n *node, initiator bool, circID uint16) error {
 	n.clientCircuitsMu.Lock()
 	cc, exists := n.clientCircuits[circID]
-	defer n.clientCircuitsMu.Unlock()
+	n.clientCircuitsMu.Unlock()
 	if !exists {
 		return fmt.Errorf("cannot destroy unknown client circuit %d", circID)
 	}
