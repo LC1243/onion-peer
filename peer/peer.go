@@ -22,6 +22,7 @@ type Tor interface {
 	// Blocks until the circuit is ready or timeout.
 	// Returns the circuit ID on success.
 	BuildCircuit(hops [3]string, timeout time.Duration) (uint16, error)
+	DestroyCircuit(circuitID uint16) error
 }
 
 // Factory is the type of function we are using to create new instances of
