@@ -525,9 +525,10 @@ func destroyCircuitAsRelay(n *node, initiator bool, circID uint16, src string) e
 	n.circuitsMu.RLock()
 	circ, exists := n.circuits[key]
 	if !exists { // Try to find circuit where src is NextHop (cell coming back)
-		for _, c := range n.circuits {
+		for k, c := range n.circuits {
 			if c.NextHop == src && c.OutCircID == circID {
 				circ = c
+				key = k
 				exists = true
 				break
 			}
