@@ -496,7 +496,6 @@ func (n *node) CleanupAllCircuits() {
 func destroyCircuitAsClient(n *node, initiator bool, circID uint16) error {
 	n.clientCircuitsMu.Lock()
 	cc, exists := n.clientCircuits[circID]
-	n.clientCircuitsMu.Unlock()
 	if !exists {
 		return fmt.Errorf("cannot destroy unknown client circuit %d", circID)
 	}
@@ -512,6 +511,7 @@ func destroyCircuitAsClient(n *node, initiator bool, circID uint16) error {
 		}
 		_ = n.SendCell(cc.Hops[0], destroyCell) // Ignore send cell error, destroy circuit resources anyway
 	}
+	n.clientCircuitsMu.Unlock()
 
 	n.CleanupClientCircuit(circID)
 	addr := n.conf.Socket.GetAddress()
@@ -534,7 +534,6 @@ func destroyCircuitAsRelay(n *node, initiator bool, circID uint16, src string) e
 			}
 		}
 	}
-	n.circuitsMu.RUnlock()
 	if !exists {
 		return fmt.Errorf("cannot destroy unknown relay circuit %d from %s", circID, src)
 	}
@@ -556,6 +555,7 @@ func destroyCircuitAsRelay(n *node, initiator bool, circID uint16, src string) e
 		}
 		_ = n.SendCell(circ.PrevHop, destroyCell)
 	}
+	n.circuitsMu.RUnlock()
 
 	n.circuitsMu.Lock()
 	delete(n.circuits, key)
