@@ -313,7 +313,9 @@ func (n *node) ExecTorCell(m types.Message, pkt transport.Packet) error {
 		return n.HandleCreated(cell, src)
 	case Relay:
 		return n.HandleRelay(cell, src)
-	case Padding, Destroy:
+	case Destroy:
+		return n.HandleDestroy(cell, src)
+	case Padding:
 		return nil
 	}
 

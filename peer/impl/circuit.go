@@ -493,3 +493,15 @@ func (n *node) DestroyCircuitAsRelay(initiator bool, circID uint16, src string) 
 	n.log.Info().Msgf("Destroyed relay circuit %d", circID)
 	return nil
 }
+
+// HandleDestroy handles a Destroy cell
+func (n *node) HandleDestroy(cell Cell, src string) error {
+	n.clientCircuitsMu.RLock()
+	_, isClientCircuit := n.clientCircuits[cell.CircID]
+	n.clientCircuitsMu.RUnlock()
+
+	if isClientCircuit {
+		return n.DestroyCircuitAsClient(false, cell.CircID)
+	}
+	return n.DestroyCircuitAsRelay(false, cell.CircID, src)
+}
