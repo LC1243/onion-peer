@@ -1,6 +1,7 @@
 package impl
 
 import (
+	"crypto/rsa"
 	"errors"
 	"fmt"
 	"os"
@@ -47,6 +48,21 @@ func NewPeer(conf peer.Configuration) peer.Peer {
 	n.ackWaiter = make(map[string]*ackWait)
 	n.circuits = make(map[circuitKey]*Circuit)
 	n.clientCircuits = make(map[uint16]*ClientCircuit)
+
+	// Initialize crypto state
+	n.peerOnionKeys = make(map[string]*rsa.PublicKey)
+	n.deffieHellmanHandshakePairs = make(map[uint16]*DeffieHellmanHandshakePairs)
+
+	// Generate onion keypair for this node
+	// Note: In production, this should be loaded from persistent storage
+	// For now, we generate a new keypair each time
+	var err error
+	n.onionKey, err = GenerateOnionKeyPair()
+	if err != nil {
+		// Log error but don't fail initialization
+		// The node can still function without crypto features
+		n.log.Error().Err(err).Msg("Failed to generate onion keypair")
+	}
 
 	if conf.MessageRegistry != nil {
 		conf.MessageRegistry.RegisterMessageCallback(types.ChatMessage{}, n.execChatMessage)
@@ -107,6 +123,13 @@ type node struct {
 	// Tor client circuits (OP side)
 	clientCircuitsMu sync.RWMutex
 	clientCircuits   map[uint16]*ClientCircuit
+
+	// Cryptography for Tor-like onion routing
+	onionKey                    *OnionKeyPair                           // This node's long-term onion keypair
+	peerOnionKeys               map[string]*rsa.PublicKey               // Cached onion public keys for peers
+	peerKeysMu                  sync.RWMutex                            // Protects peerOnionKeys
+	deffieHellmanHandshakePairs map[uint16]*DeffieHellmanHandshakePairs // Pending handshakes by circuit ID
+	handshakeStatesMu           sync.Mutex                              // Protects handshakeStates
 }
 
 // Start implements peer.Service
