@@ -482,7 +482,9 @@ func (n *node) DestroyCircuitAsRelay(initiator bool, circID uint16, src string) 
 		CircID:  circID,
 		Command: Destroy,
 	}
-	_ = n.SendCell(circ.NextHop, destroyCell) // Ignore send cell error, destroy circuit resources anyway
+	if circ.NextHop != "" {
+		_ = n.SendCell(circ.NextHop, destroyCell) // Do not send to the next hop if exit node
+	}
 	if initiator {
 		_ = n.SendCell(circ.PrevHop, destroyCell) // Also destroy the previous hop if this relay initiated
 	}
