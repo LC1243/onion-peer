@@ -465,3 +465,28 @@ func (n *node) DestroyCircuitAsClient(circID uint16) error {
 	n.log.Info().Msgf("Destroyed client circuit %d", circID)
 	return nil
 }
+
+// DestroyCircuitAsRelay starts or relay circuit teardown as a relay node
+func (n *node) DestroyCircuitAsRelay(circID uint16, src string) error {
+	key := circuitKey{PrevHop: src, InCircID: circID}
+	n.circuitsMu.Lock()
+	circ, exist := n.circuits[key]
+	n.circuitsMu.Unlock()
+	if !exist {
+		return fmt.Errorf("cannot destroy unknown relay circuit %d from %s", circID, src)
+	}
+
+	// Send to both directions in case of the relay initiating the teardown
+	destroyCell := Cell{
+		CircID:  circID,
+		Command: Destroy,
+	}
+	_ = n.SendCell(circ.PrevHop, destroyCell) // Ignore send cell error, destroy circuit resources anyway
+	_ = n.SendCell(circ.NextHop, destroyCell)
+
+	n.circuitsMu.Lock()
+	delete(n.circuits, key)
+	n.circuitsMu.Unlock()
+	n.log.Info().Msgf("Destroyed relay circuit %d", circID)
+	return nil
+}
