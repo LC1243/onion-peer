@@ -443,7 +443,7 @@ func (n *node) SendExtendToHop(cc *ClientCircuit, nextHop string) error {
 }
 
 // DestroyCircuitAsClient start or relay circuit teardown as a client node
-func (n *node) DestroyCircuitAsClient(circID uint16) error {
+func (n *node) DestroyCircuitAsClient(initiator bool, circID uint16) error {
 	n.clientCircuitsMu.Lock()
 	cc, exists := n.clientCircuits[circID]
 	defer n.clientCircuitsMu.Unlock()
@@ -455,11 +455,13 @@ func (n *node) DestroyCircuitAsClient(circID uint16) error {
 		return nil // For now return if circuit not ready, later we can block (wait for circuit to be created)
 	}
 
-	destroyCell := Cell{
-		CircID:  circID,
-		Command: Destroy,
+	if initiator {
+		destroyCell := Cell{
+			CircID:  circID,
+			Command: Destroy,
+		}
+		_ = n.SendCell(cc.Hops[0], destroyCell) // Ignore send cell error, destroy circuit resources anyway
 	}
-	_ = n.SendCell(cc.Hops[0], destroyCell) // Ignore send cell error, destroy circuit resources anyway
 
 	n.CleanupClientCircuit(circID)
 	n.log.Info().Msgf("Destroyed client circuit %d", circID)
@@ -467,7 +469,7 @@ func (n *node) DestroyCircuitAsClient(circID uint16) error {
 }
 
 // DestroyCircuitAsRelay starts or relay circuit teardown as a relay node
-func (n *node) DestroyCircuitAsRelay(circID uint16, src string) error {
+func (n *node) DestroyCircuitAsRelay(initiator bool, circID uint16, src string) error {
 	key := circuitKey{PrevHop: src, InCircID: circID}
 	n.circuitsMu.Lock()
 	circ, exist := n.circuits[key]
@@ -476,13 +478,14 @@ func (n *node) DestroyCircuitAsRelay(circID uint16, src string) error {
 		return fmt.Errorf("cannot destroy unknown relay circuit %d from %s", circID, src)
 	}
 
-	// Send to both directions in case of the relay initiating the teardown
 	destroyCell := Cell{
 		CircID:  circID,
 		Command: Destroy,
 	}
-	_ = n.SendCell(circ.PrevHop, destroyCell) // Ignore send cell error, destroy circuit resources anyway
-	_ = n.SendCell(circ.NextHop, destroyCell)
+	_ = n.SendCell(circ.NextHop, destroyCell) // Ignore send cell error, destroy circuit resources anyway
+	if initiator {
+		_ = n.SendCell(circ.PrevHop, destroyCell) // Also destroy the previous hop if this relay initiated
+	}
 
 	n.circuitsMu.Lock()
 	delete(n.circuits, key)
