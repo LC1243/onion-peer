@@ -477,7 +477,7 @@ func destroyCircuitAsClient(n *node, initiator bool, circID uint16) error {
 
 	n.CleanupClientCircuit(circID)
 	addr := n.conf.Socket.GetAddress()
-	n.log.Info().Str("peer", addr).Uint16("circID", circID).Msg("Destroyed circuit")
+	n.log.Info().Str("peer", addr).Uint16("circID", circID).Msg("Destroyed client")
 	return nil
 }
 
@@ -491,14 +491,18 @@ func destroyCircuitAsRelay(n *node, initiator bool, circID uint16, src string) e
 		return fmt.Errorf("cannot destroy unknown relay circuit %d from %s", circID, src)
 	}
 
-	destroyCell := Cell{
-		CircID:  circID,
-		Command: Destroy,
-	}
 	if circ.NextHop != "" {
+		destroyCell := Cell{
+			CircID:  circ.OutCircID,
+			Command: Destroy,
+		}
 		_ = n.SendCell(circ.NextHop, destroyCell) // Do not send to the next hop if exit node
 	}
 	if initiator {
+		destroyCell := Cell{
+			CircID:  circ.InCircID,
+			Command: Destroy,
+		}
 		_ = n.SendCell(circ.PrevHop, destroyCell) // Also destroy the previous hop if this relay initiated
 	}
 
