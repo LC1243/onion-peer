@@ -492,7 +492,7 @@ func (n *node) CleanupAllCircuits() {
 	n.log.Info().Str("peer", addr).Msg("Cleaned up all circuits")
 }
 
-// DestroyCircuitAsClient start or relay circuit teardown as a client node
+// destroyCircuitAsClient starts or relays circuit teardown as a client node
 func destroyCircuitAsClient(n *node, initiator bool, circID uint16) error {
 	n.clientCircuitsMu.Lock()
 	cc, exists := n.clientCircuits[circID]
@@ -519,7 +519,7 @@ func destroyCircuitAsClient(n *node, initiator bool, circID uint16) error {
 	return nil
 }
 
-// DestroyCircuitAsRelay starts or relay circuit teardown as a relay node
+// destroyCircuitAsRelay starts or relays circuit teardown as a relay node
 func destroyCircuitAsRelay(n *node, initiator bool, circID uint16, src string) error {
 	key := circuitKey{PrevHop: src, InCircID: circID}
 	n.circuitsMu.RLock()

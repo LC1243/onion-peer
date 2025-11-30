@@ -149,7 +149,7 @@ func Test_TOR_Circuit_Destroy_ClientUnknownCircuit_Error(t *testing.T) {
 	require.Error(t, err, "DestroyCircuit should fail for unknown circuit ID")
 }
 
-// Test_TOR_Circuit_Destroy_ClientInitiated_Success tests successful client-initiated circuit destruction initialed
+// Test_TOR_Circuit_Destroy_ClientInitiated_Success tests successful client-initiated circuit destruction initiated
 // by the client. A second destruction attempt should fail.
 func Test_TOR_Circuit_Destroy_ClientInitiated_Success(t *testing.T) {
 	transp := channelFac()
@@ -211,7 +211,7 @@ func Test_TOR_Circuit_Destroy_ClientInitiated_Success(t *testing.T) {
 	require.Error(t, err, "destroying again should fail for non-existing circuit")
 }
 
-// Test_TOR_Circuit_Destroy_RelayInitiated_Success tests successful relay-initiated circuit destruction initialed
+// Test_TOR_Circuit_Destroy_RelayInitiated_Success tests successful relay-initiated circuit destruction initiated
 // by the guard relay. A second destruction attempt should fail.
 func Test_TOR_Circuit_Destroy_RelayInitiated_Success(t *testing.T) {
 	transp := channelFac()
@@ -274,7 +274,7 @@ func Test_TOR_Circuit_Destroy_RelayInitiated_Success(t *testing.T) {
 }
 
 // Test_TOR_Circuit_Cleanup_ClientInitiated_Success tests that multiple circuits can be built and exist simultaneously
-// and that if the middle relay that is used in both circuits is cleanup, both circuits are destroyed.
+// and that if the middle relay that is used in both circuits is cleaned up, both circuits are destroyed.
 func Test_TOR_Circuit_Cleanup_ClientInitiated_Success(t *testing.T) {
 	transp := channelFac()
 
