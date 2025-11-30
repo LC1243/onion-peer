@@ -454,6 +454,14 @@ func (n *node) DestroyCircuit(circID uint16) error {
 	return errors.New("DestroyCircuit called for unknown circuit")
 }
 
+// RelayDestroyCircuit starts circuit teardown from the relay side with source address
+func (n *node) RelayDestroyCircuit(circID uint16, src string) error {
+	if src == "" {
+		return errors.New("source address required for relay circuit destruction")
+	}
+	return destroyCircuitAsRelay(n, true, circID, src)
+}
+
 // DestroyCircuitAsClient start or relay circuit teardown as a client node
 func destroyCircuitAsClient(n *node, initiator bool, circID uint16) error {
 	n.clientCircuitsMu.Lock()

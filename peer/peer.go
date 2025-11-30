@@ -27,6 +27,11 @@ type Tor interface {
 	// Returns an error if the circuit does not exist or teardown fails.
 	DestroyCircuit(circuitID uint16) error
 
+	// RelayDestroyCircuit is called by a relay to destroy a circuit initiated
+	// by another peer. src is the address of the previous or next hop and allows
+	// the relay to identify which circuit to destroy.
+	RelayDestroyCircuit(circID uint16, src string) error
+
 	// GetCircuitsNbr returns the number of active relay circuits managed by the peer.
 	GetCircuitsNbr() int
 

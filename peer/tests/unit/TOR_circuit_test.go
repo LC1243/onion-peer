@@ -210,3 +210,65 @@ func Test_TOR_Circuit_Destroy_ClientInitiated_Success(t *testing.T) {
 	err = client.Peer.DestroyCircuit(circID)
 	require.Error(t, err, "destroying again should fail for non-existing circuit")
 }
+
+// Test_TOR_Circuit_Destroy_RelayInitiated_Success tests successful relay-initiated circuit destruction initialed
+// by the guard relay. A second destruction attempt should fail.
+func Test_TOR_Circuit_Destroy_RelayInitiated_Success(t *testing.T) {
+	transp := channelFac()
+
+	// Create 4 nodes: client + 3 relays (guard, middle, exit)
+	client := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer client.Stop()
+
+	guard := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer guard.Stop()
+
+	middle := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer middle.Stop()
+
+	exit := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer exit.Stop()
+
+	// Set up full mesh routing so all nodes can reach each other
+	nodes := []z.TestNode{client, guard, middle, exit}
+	for i, n1 := range nodes {
+		for j, n2 := range nodes {
+			if i != j {
+				n1.AddPeer(n2.GetAddr())
+			}
+		}
+	}
+
+	// Give them time to exchange routing information
+	time.Sleep(100 * time.Millisecond)
+
+	hops := [3]string{guard.GetAddr(), middle.GetAddr(), exit.GetAddr()}
+
+	// Build the circuit with a 5 second timeout
+	circID, err := client.Peer.BuildCircuit(hops, 5*time.Second)
+	require.NoError(t, err, "BuildCircuit should succeed")
+	require.NotZero(t, circID, "Circuit ID should be non-zero")
+
+	// Check that circuit exists before destruction
+	require.Equal(t, 1, client.Peer.GetClientCircuitsNbr(), "client should have 1 circuit")
+	require.Equal(t, 1, guard.Peer.GetCircuitsNbr(), "guard should have 1 relay circuit")
+	require.Equal(t, 1, middle.Peer.GetCircuitsNbr(), "middle should have 1 relay circuit")
+	require.Equal(t, 1, exit.Peer.GetCircuitsNbr(), "exit should have 1 relay circuit")
+
+	// Destroy initiated by the guard relay
+	err = guard.Peer.RelayDestroyCircuit(circID, client.GetAddr())
+	require.NoError(t, err, "destroy should succeed for existing circuit")
+
+	// Give time for destroy to propagate
+	time.Sleep(100 * time.Millisecond)
+
+	// Check that no node has circuit resources anymore
+	require.Equal(t, 0, client.Peer.GetClientCircuitsNbr(), "client should have no circuit")
+	require.Equal(t, 0, guard.Peer.GetCircuitsNbr(), "guard should have no relay circuit")
+	require.Equal(t, 0, middle.Peer.GetCircuitsNbr(), "middle should have no relay circuit")
+	require.Equal(t, 0, exit.Peer.GetCircuitsNbr(), "exit should have no relay circuit")
+
+	// Destroying again should fail
+	err = guard.Peer.RelayDestroyCircuit(circID, client.GetAddr())
+	require.Error(t, err, "destroying again should fail for non-existing circuit")
+}
