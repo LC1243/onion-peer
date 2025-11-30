@@ -32,6 +32,9 @@ type Tor interface {
 	// the relay to identify which circuit to destroy.
 	RelayDestroyCircuit(circID uint16, src string) error
 
+	// CleanupAllCircuits tears down all active circuits managed by the peer
+	CleanupAllCircuits()
+
 	// GetCircuitsNbr returns the number of active relay circuits managed by the peer.
 	GetCircuitsNbr() int
 
