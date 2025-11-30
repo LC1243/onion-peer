@@ -484,26 +484,38 @@ func destroyCircuitAsClient(n *node, initiator bool, circID uint16) error {
 // DestroyCircuitAsRelay starts or relay circuit teardown as a relay node
 func destroyCircuitAsRelay(n *node, initiator bool, circID uint16, src string) error {
 	key := circuitKey{PrevHop: src, InCircID: circID}
-	n.circuitsMu.Lock()
-	circ, exist := n.circuits[key]
-	n.circuitsMu.Unlock()
-	if !exist {
+	n.circuitsMu.RLock()
+	circ, exists := n.circuits[key]
+	if !exists { // Try to find circuit where src is NextHop (cell coming back)
+		for _, c := range n.circuits {
+			if c.NextHop == src && c.OutCircID == circID {
+				circ = c
+				exists = true
+				break
+			}
+		}
+	}
+	n.circuitsMu.RUnlock()
+	if !exists {
 		return fmt.Errorf("cannot destroy unknown relay circuit %d from %s", circID, src)
 	}
 
-	if circ.NextHop != "" {
-		destroyCell := Cell{
-			CircID:  circ.OutCircID,
-			Command: Destroy,
+	// Send Destroy to the right direction, or to both if initiator of the teardown
+	if src == circ.PrevHop || initiator {
+		if circ.NextHop != "" { // If the node is the exit node do not send to NextHop
+			destroyCell := Cell{
+				CircID:  circ.OutCircID,
+				Command: Destroy,
+			}
+			_ = n.SendCell(circ.NextHop, destroyCell)
 		}
-		_ = n.SendCell(circ.NextHop, destroyCell) // Do not send to the next hop if exit node
 	}
-	if initiator {
+	if src == circ.NextHop || initiator {
 		destroyCell := Cell{
 			CircID:  circ.InCircID,
 			Command: Destroy,
 		}
-		_ = n.SendCell(circ.PrevHop, destroyCell) // Also destroy the previous hop if this relay initiated
+		_ = n.SendCell(circ.PrevHop, destroyCell)
 	}
 
 	n.circuitsMu.Lock()
