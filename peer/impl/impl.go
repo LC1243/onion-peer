@@ -51,7 +51,7 @@ func NewPeer(conf peer.Configuration) peer.Peer {
 
 	// Initialize crypto state
 	n.peerOnionKeys = make(map[string]*rsa.PublicKey)
-	n.deffieHellmanHandshakePairs = make(map[uint16]*DeffieHellmanHandshakePairs)
+	n.diffieHellmanHandshakePairs = make(map[uint16]*DiffieHellmanHandshakePairs)
 
 	// Generate onion keypair for this node
 	// Note: In production, this should be loaded from persistent storage
@@ -128,7 +128,7 @@ type node struct {
 	onionKey                    *OnionKeyPair                           // This node's long-term onion keypair
 	peerOnionKeys               map[string]*rsa.PublicKey               // Cached onion public keys for peers
 	peerKeysMu                  sync.RWMutex                            // Protects peerOnionKeys
-	deffieHellmanHandshakePairs map[uint16]*DeffieHellmanHandshakePairs // Pending handshakes by circuit ID
+	diffieHellmanHandshakePairs map[uint16]*DiffieHellmanHandshakePairs // Pending handshakes by circuit ID
 	handshakeStatesMu           sync.Mutex                              // Protects handshakeStates
 }
 
