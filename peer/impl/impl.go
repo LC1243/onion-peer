@@ -343,3 +343,20 @@ func (n *node) ExecTorCell(m types.Message, pkt transport.Packet) error {
 	// Unknown command
 	return fmt.Errorf("unknown cell command %d", cell.Command)
 }
+
+// Get onion public key
+func (n *node) GetOnionPublicKey() *rsa.PublicKey {
+	if n.onionKey == nil {
+		return nil
+	}
+	return n.onionKey.Public
+}
+
+// AddPeerOnionKey stores a remote onion public key in the cache
+// This function is used to populate a map of IP addresses to onion public keys
+// In the future, this should be replaced with a persistent storage mechanism
+func (n *node) AddPeerOnionKey(peerAddr string, pubKey *rsa.PublicKey) {
+	n.peerKeysMu.Lock()
+	defer n.peerKeysMu.Unlock()
+	n.peerOnionKeys[peerAddr] = pubKey
+}
