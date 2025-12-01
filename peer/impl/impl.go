@@ -125,10 +125,13 @@ type node struct {
 	clientCircuits   map[uint16]*ClientCircuit
 
 	// Cryptography for Tor-like onion routing
-	onionKey                    *OnionKeyPair                           // This node's long-term onion keypair
-	peerOnionKeys               map[string]*rsa.PublicKey               // Cached onion public keys for peers
-	peerKeysMu                  sync.RWMutex                            // Protects peerOnionKeys
+	onionKey      *OnionKeyPair             // This node's long-term onion keypair
+	peerOnionKeys map[string]*rsa.PublicKey // Cached onion public keys for peers
+	peerKeysMu    sync.RWMutex              // Protects peerOnionKeys
+
+	// NOTE: Maybe they can be added to the Circuit struct
 	diffieHellmanHandshakePairs map[uint16]*DiffieHellmanHandshakePairs // Pending handshakes by circuit ID
+	circuitCryptoStates         map[uint16]*CircuitCryptoState          // Crypto state per circuit ID
 	handshakeStatesMu           sync.Mutex                              // Protects handshakeStates
 }
 
