@@ -67,10 +67,25 @@ func (n *node) HandleCreate(cell Cell, src string) error {
 
 	n.log.Info().Str("src", src).Uint16("circID", cell.CircID).Msg("Created circuit")
 
+	// Perform handshake and derive keys using CompleteHandshakeAsResponder
+	// Then reply with the appropriate payload
+	payloadBytes, crypto, err := n.CompleteHandshakeAsResponder(n.onionKey, cell.Payload[:])
+	if err != nil {
+		return fmt.Errorf("handshake failed for circuit %d from %s: %w", cell.CircID, src, err)
+	}
+
+	// Store the crypto state for this circuit
+	n.circuitCryptoStates[cell.CircID] = crypto
+
+	// Prepare the payload for Created
+	var payload [CellPayloadLen]byte
+	copy(payload[:], payloadBytes)
+
 	// Send Created
 	reply := Cell{
 		CircID:  cell.CircID,
 		Command: Created,
+		Payload: payload,
 	}
 	return n.SendCell(src, reply)
 }
