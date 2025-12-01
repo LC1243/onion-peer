@@ -441,3 +441,152 @@ func (n *node) SendExtendToHop(cc *ClientCircuit, nextHop string) error {
 	// Send to the Guard (first hop) - it will forward through the circuit
 	return n.SendCell(cc.Hops[0], cell)
 }
+
+// DestroyCircuit starts circuit teardown from the client side
+func (n *node) DestroyCircuit(circID uint16) error {
+	n.clientCircuitsMu.RLock()
+	_, isClientCircuit := n.clientCircuits[circID]
+	n.clientCircuitsMu.RUnlock()
+
+	if isClientCircuit {
+		return destroyCircuitAsClient(n, true, circID)
+	}
+	return errors.New("DestroyCircuit called for unknown circuit")
+}
+
+// RelayDestroyCircuit starts circuit teardown from the relay side with source address
+func (n *node) RelayDestroyCircuit(circID uint16, src string) error {
+	if src == "" {
+		return errors.New("source address required for relay circuit destruction")
+	}
+	return destroyCircuitAsRelay(n, true, circID, src)
+}
+
+// CleanupAllCircuits destroys all circuits (client and relay) managed by this node
+func (n *node) CleanupAllCircuits() {
+	var circID []uint16
+	n.clientCircuitsMu.RLock()
+	for id := range n.clientCircuits {
+		circID = append(circID, id)
+	}
+	n.clientCircuitsMu.RUnlock()
+
+	// Destroy all client circuits
+	for _, id := range circID {
+		_ = destroyCircuitAsClient(n, true, id)
+	}
+
+	var circuitKeys []circuitKey
+	n.circuitsMu.RLock()
+	for key := range n.circuits {
+		circuitKeys = append(circuitKeys, key)
+	}
+	n.circuitsMu.RUnlock()
+
+	// Destroy all relay circuits
+	for _, key := range circuitKeys {
+		_ = destroyCircuitAsRelay(n, true, key.InCircID, key.PrevHop)
+	}
+
+	addr := n.conf.Socket.GetAddress()
+	n.log.Info().Str("peer", addr).Msg("Cleaned up all circuits")
+}
+
+// destroyCircuitAsClient starts or relays circuit teardown as a client node
+func destroyCircuitAsClient(n *node, initiator bool, circID uint16) error {
+	n.clientCircuitsMu.Lock()
+	cc, exists := n.clientCircuits[circID]
+	if !exists {
+		return fmt.Errorf("cannot destroy unknown client circuit %d", circID)
+	}
+
+	if cc.State != CircuitStateReady {
+		return nil // For now return if circuit not ready, later we can block (wait for circuit to be created)
+	}
+
+	if initiator {
+		destroyCell := Cell{
+			CircID:  circID,
+			Command: Destroy,
+		}
+		_ = n.SendCell(cc.Hops[0], destroyCell) // Ignore send cell error, destroy circuit resources anyway
+	}
+	n.clientCircuitsMu.Unlock()
+
+	n.CleanupClientCircuit(circID)
+	addr := n.conf.Socket.GetAddress()
+	n.log.Info().Str("peer", addr).Uint16("circID", circID).Msg("Destroyed client")
+	return nil
+}
+
+// destroyCircuitAsRelay starts or relays circuit teardown as a relay node
+func destroyCircuitAsRelay(n *node, initiator bool, circID uint16, src string) error {
+	key := circuitKey{PrevHop: src, InCircID: circID}
+	n.circuitsMu.RLock()
+	circ, exists := n.circuits[key]
+	if !exists { // Try to find circuit where src is NextHop (cell coming back)
+		for k, c := range n.circuits {
+			if c.NextHop == src && c.OutCircID == circID {
+				circ = c
+				key = k
+				exists = true
+				break
+			}
+		}
+	}
+	if !exists {
+		return fmt.Errorf("cannot destroy unknown relay circuit %d from %s", circID, src)
+	}
+
+	// Send Destroy to the right direction, or to both if initiator of the teardown
+	if src == circ.PrevHop || initiator {
+		if circ.NextHop != "" { // If the node is the exit node do not send to NextHop
+			destroyCell := Cell{
+				CircID:  circ.OutCircID,
+				Command: Destroy,
+			}
+			_ = n.SendCell(circ.NextHop, destroyCell)
+		}
+	}
+	if src == circ.NextHop || initiator {
+		destroyCell := Cell{
+			CircID:  circ.InCircID,
+			Command: Destroy,
+		}
+		_ = n.SendCell(circ.PrevHop, destroyCell)
+	}
+	n.circuitsMu.RUnlock()
+
+	n.circuitsMu.Lock()
+	delete(n.circuits, key)
+	n.circuitsMu.Unlock()
+	addr := n.conf.Socket.GetAddress()
+	n.log.Info().Str("peer", addr).Uint16("circID", circID).Msg("Destroyed relay")
+	return nil
+}
+
+// HandleDestroy handles a Destroy cell
+func (n *node) HandleDestroy(cell Cell, src string) error {
+	n.clientCircuitsMu.RLock()
+	_, isClientCircuit := n.clientCircuits[cell.CircID]
+	n.clientCircuitsMu.RUnlock()
+
+	if isClientCircuit {
+		return destroyCircuitAsClient(n, false, cell.CircID)
+	}
+	return destroyCircuitAsRelay(n, false, cell.CircID, src)
+}
+
+// GetCircuitsNbr returns the number of relay circuits (for testing)
+func (n *node) GetCircuitsNbr() int {
+	n.circuitsMu.RLock()
+	defer n.circuitsMu.RUnlock()
+	return len(n.circuits)
+}
+
+// GetClientCircuitsNbr returns the number of client circuits (for testing)
+func (n *node) GetClientCircuitsNbr() int {
+	n.clientCircuitsMu.RLock()
+	defer n.clientCircuitsMu.RUnlock()
+	return len(n.clientCircuits)
+}
