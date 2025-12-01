@@ -318,12 +318,37 @@ func (n *node) BuildCircuit(hops [3]string, timeout time.Duration) (uint16, erro
 		Str("exit", hops[2]).
 		Msg("Building 3-hop circuit")
 
-	// Step 1: Send Create to the Guard node
+	// Obtain the next hop's public key for encryption
+	// ASSUMPTION: The public onion key is already available in the map
+	// It is necessary to populate the public key map before calling BuildCircuit
+	nextHopPublicOnionKey, err := n.GetPeerPublicOnionKey(hops[0])
+	if err != nil {
+		n.CleanupClientCircuit(circID)
+		return 0, fmt.Errorf("failed to get onion key for guard %s: %w", hops[0], err)
+	}
+
+	// Call BeginHandshake to prepare the payload and get the handshake state for the current circuit
+	handshakePayload, diffieHellmanHandshakePair, err := n.BeginHandshake(nextHopPublicOnionKey)
+	if err != nil {
+		n.CleanupClientCircuit(circID)
+		return 0, fmt.Errorf("failed to begin handshake with guard %s: %w", hops[0], err)
+	}
+
+	// Store the handshake state for later use when processing the CREATED cell
+	n.diffieHellmanHandshakePairs[circID] = diffieHellmanHandshakePair
+
+	// Create the payload by copying handshake data
+	var payload [CellPayloadLen]byte
+	copy(payload[:], handshakePayload)
+
 	createCell := Cell{
 		CircID:  circID,
 		Command: Create,
+		Payload: payload,
 	}
-	err := n.SendCell(hops[0], createCell)
+
+	// Send Create to the Guard node
+	err = n.SendCell(hops[0], createCell)
 	if err != nil {
 		n.CleanupClientCircuit(circID)
 		return 0, fmt.Errorf("failed to send Create to guard: %w", err)
@@ -365,6 +390,11 @@ func (n *node) CleanupClientCircuit(circID uint16) {
 	n.clientCircuitsMu.Lock()
 	delete(n.clientCircuits, circID)
 	n.clientCircuitsMu.Unlock()
+
+	// Clean up the handshake state to avoid memory leaks
+	n.handshakeStatesMu.Lock()
+	delete(n.diffieHellmanHandshakePairs, circID)
+	n.handshakeStatesMu.Unlock()
 }
 
 // HandleCreatedAsOP handles a Created cell when this node is the OP
