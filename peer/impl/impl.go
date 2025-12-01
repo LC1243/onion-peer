@@ -360,3 +360,14 @@ func (n *node) AddPeerOnionKey(peerAddr string, pubKey *rsa.PublicKey) {
 	defer n.peerKeysMu.Unlock()
 	n.peerOnionKeys[peerAddr] = pubKey
 }
+
+// Retrieves a remote onion public key from the cache
+func (n *node) GetPeerPublicOnionKey(peerAddr string) (*rsa.PublicKey, error) {
+	n.peerKeysMu.RLock()
+	defer n.peerKeysMu.RUnlock()
+	pubKey, ok := n.peerOnionKeys[peerAddr]
+	if !ok {
+		return nil, fmt.Errorf("onion public key for peer %s not found", peerAddr)
+	}
+	return pubKey, nil
+}
