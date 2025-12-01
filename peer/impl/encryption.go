@@ -103,7 +103,7 @@ func GenerateOnionKeyPair() (*OnionKeyPair, error) {
 
 // Initiates the handshake from the initiator side
 // Called by the origin node when sending a CREATE/EXTEND cell
-func BeginHandshake(publicOnionKey *rsa.PublicKey) (outgoingPayload []byte, state *DiffieHellmanHandshakePairs, err error) {
+func (n *node) BeginHandshake(publicOnionKey *rsa.PublicKey) (outgoingPayload []byte, state *DiffieHellmanHandshakePairs, err error) {
 	var privateKey, publicKey [32]byte
 
 	// Generate private key
@@ -131,7 +131,7 @@ func BeginHandshake(publicOnionKey *rsa.PublicKey) (outgoingPayload []byte, stat
 
 // Completes the handshake from the responder side
 // Called by the relay node after receiving a CREATE/EXTEND cell.
-func CompleteHandshakeAsResponder(privateOnionKey *OnionKeyPair, incomingPayload []byte) (responsePayload []byte, crypto *CircuitCryptoState, err error) {
+func (n *node) CompleteHandshakeAsResponder(privateOnionKey *OnionKeyPair, incomingPayload []byte) (responsePayload []byte, crypto *CircuitCryptoState, err error) {
 	// Decrypt the first half of DH keypair E(g^x1) using our private onion key
 	remotePublicKeyBytes, err := rsa.DecryptOAEP(sha256.New(), rand.Reader, privateOnionKey.Private, incomingPayload, nil)
 	if err != nil {
@@ -180,7 +180,7 @@ func CompleteHandshakeAsResponder(privateOnionKey *OnionKeyPair, incomingPayload
 
 // Completes the handshake from the initiator side.
 // Called by the origin node after receiving a CREATED/EXTENDED cell.
-func FinishHandshakeAsInitiator(state *DiffieHellmanHandshakePairs, responsePayload []byte) (*CircuitCryptoState, error) {
+func (n *node) FinishHandshakeAsInitiator(state *DiffieHellmanHandshakePairs, responsePayload []byte) (*CircuitCryptoState, error) {
 	if len(responsePayload) < 64 {
 		return nil, fmt.Errorf("invalid response payload length: %d", len(responsePayload))
 	}
