@@ -22,6 +22,14 @@ type Tor interface {
 	// Blocks until the circuit is ready or timeout.
 	// Returns the circuit ID on success.
 	BuildCircuit(hops [3]string, timeout time.Duration) (uint16, error)
+
+	// GetOnionPublicKey returns this node's public onion key.
+	// Used for Tor-like circuit creation.
+	GetOnionPublicKey() any
+
+	// AddPeerOnionKey stores a remote peer's public onion key.
+	// This is used to encrypt CREATE/EXTEND cells to that peer.
+	AddPeerOnionKey(peerAddr string, pubKey any)
 }
 
 // Factory is the type of function we are using to create new instances of
