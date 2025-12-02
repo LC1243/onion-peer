@@ -65,10 +65,11 @@ func (n *node) HandleCreate(cell Cell, src string) error {
 	}
 	n.circuits[key] = circ
 
-	n.log.Info().Str("src", src).Uint16("circID", cell.CircID).Msg("Created circuit")
+	n.log.Info().Str("src", src).Uint16("circID", cell.CircID).Msg("Handling Create cell")
 
 	// Perform handshake and derive keys using CompleteHandshakeAsResponder
-	// Then reply with the appropriate payload
+	// Then reply with the appropriate payload'
+	n.log.Info().Str("src", src).Uint16("circID", cell.CircID).Msg("Completing handshake as responder")
 	payloadBytes, crypto, err := n.CompleteHandshakeAsResponder(n.onionKey, cell.Payload[:])
 	if err != nil {
 		return fmt.Errorf("handshake failed for circuit %d from %s: %w", cell.CircID, src, err)
@@ -87,6 +88,9 @@ func (n *node) HandleCreate(cell Cell, src string) error {
 		Command: Created,
 		Payload: payload,
 	}
+
+	n.log.Info().Str("src", src).Uint16("circID", cell.CircID).Msg("Sending Created")
+
 	return n.SendCell(src, reply)
 }
 
@@ -380,12 +384,14 @@ func (n *node) BuildCircuit(hops [3]string, timeout time.Duration) (uint16, erro
 	// ASSUMPTION: The public onion key is already available in the map
 	// It is necessary to populate the public key map before calling BuildCircuit
 	nextHopPublicOnionKey, err := n.GetPeerPublicOnionKey(hops[0])
+	n.log.Info().Str("guard", hops[0]).Msg("Obtained guard's public onion key")
 	if err != nil {
 		n.CleanupClientCircuit(circID)
 		return 0, fmt.Errorf("failed to get onion key for guard %s: %w", hops[0], err)
 	}
 
 	// Call BeginHandshake to prepare the payload and get the handshake state for the current circuit
+	n.log.Info().Str("guard", hops[0]).Msg("Beginning handshake with guard")
 	handshakePayload, diffieHellmanHandshakePair, err := n.BeginHandshake(nextHopPublicOnionKey)
 	if err != nil {
 		n.CleanupClientCircuit(circID)
@@ -406,6 +412,7 @@ func (n *node) BuildCircuit(hops [3]string, timeout time.Duration) (uint16, erro
 	}
 
 	// Send Create to the Guard node
+	n.log.Info().Str("guard", hops[0]).Msg("Sending Create to guard")
 	err = n.SendCell(hops[0], createCell)
 	if err != nil {
 		n.CleanupClientCircuit(circID)
