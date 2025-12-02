@@ -450,9 +450,9 @@ func (n *node) CleanupClientCircuit(circID uint16) {
 	n.clientCircuitsMu.Unlock()
 
 	// Clean up the handshake state to avoid memory leaks
-	n.handshakeStatesMu.Lock()
+	n.cryptoStatesMu.Lock()
 	delete(n.diffieHellmanHandshakePairs, circID)
-	n.handshakeStatesMu.Unlock()
+	n.cryptoStatesMu.Unlock()
 }
 
 // HandleCreatedAsOP handles a Created cell when this node is the OP
