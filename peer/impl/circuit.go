@@ -179,7 +179,7 @@ func (n *node) HandleRelayAsOP(cell Cell, src string, cc *ClientCircuit) error {
 
 	switch relayCell.Command {
 	case RelayExtended:
-		return n.HandleRelayExtendedAsOP(cell.CircID)
+		return n.HandleRelayExtendedAsOP(relayCell)
 	default:
 		return fmt.Errorf("unexpected relay command %d for client circuit", relayCell.Command)
 	}
@@ -460,10 +460,11 @@ func (n *node) HandleCreatedAsOP(cell Cell, src string) error {
 }
 
 // HandleRelayExtendedAsOP handles a RelayExtended cell when this node is the OP
-func (n *node) HandleRelayExtendedAsOP(circID uint16) error {
+func (n *node) HandleRelayExtendedAsOP(relayCell RelayCell) error {
 	n.clientCircuitsMu.Lock()
 	defer n.clientCircuitsMu.Unlock()
 
+	circID := relayCell.CircID
 	cc, exists := n.clientCircuits[circID]
 	if !exists {
 		return fmt.Errorf("received RelayExtended for unknown client circuit %d", circID)
@@ -477,6 +478,24 @@ func (n *node) HandleRelayExtendedAsOP(circID uint16) error {
 		return n.SendExtendToHop(cc, cc.Hops[2])
 
 	case CircuitStateExtending2:
+
+		// At this point the Payload of EXTENDED should have the second half of the handshake
+		// So decrypt the payload add complete the handshake
+		// FIXME: Forward or Backward direction?
+		relayExtendedPayloadPlainText, err := DecryptRelayPayload(n.circuitCryptoStates[cc.CircID], DirectionForward, relayCell.Data, relayCell.Digest)
+		if err != nil {
+			return fmt.Errorf("failed to decrypt relay extended payload for circuit %d: %w", circID, err)
+		}
+
+		// Complete the handshake as the initiator for the Exit node
+		circuitCryptoState, err := n.FinishHandshakeAsInitiator(n.diffieHellmanHandshakePairs[cc.CircID], relayExtendedPayloadPlainText)
+		if err != nil {
+			return fmt.Errorf("failed to complete handshake for circuit %d at Exit: %w", circID, err)
+		}
+
+		// Store the crypto state for this circuit
+		n.circuitCryptoStates[cc.CircID] = circuitCryptoState
+
 		// Exit responded, circuit is ready!
 		cc.State = CircuitStateReady
 		n.log.Info().Uint16("circID", circID).Msg("Circuit fully established!")
