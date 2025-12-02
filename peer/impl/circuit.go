@@ -536,6 +536,11 @@ func (n *node) HandleRelayExtendedAsOP(relayCell RelayCell) error {
 		// Store the crypto state for this circuit
 		n.circuitCryptoStates[cc.CircID] = circuitCryptoState
 
+		cc.State = CircuitStateExtending2
+		n.log.Info().Uint16("circID", circID).Msg("Middle connected, extending to Exit")
+		return n.SendExtendToHop(cc, cc.Hops[2])
+
+	case CircuitStateExtending2:
 		// Exit responded, circuit is ready!
 		cc.State = CircuitStateReady
 		n.log.Info().Uint16("circID", circID).Msg("Circuit fully established!")
