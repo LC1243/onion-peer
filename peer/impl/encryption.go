@@ -132,9 +132,17 @@ func (n *node) BeginHandshake(publicOnionKey *rsa.PublicKey) (outgoingPayload []
 // Completes the handshake from the responder side
 // Called by the relay node after receiving a CREATE/EXTEND cell.
 func (n *node) CompleteHandshakeAsResponder(privateOnionKey *OnionKeyPair, incomingPayload []byte) (responsePayload []byte, crypto *CircuitCryptoState, err error) {
+	// Extract only the actual ciphertext
+	const rsaCiphertextSize = 256
+	if len(incomingPayload) < rsaCiphertextSize {
+		n.log.Error().Msgf("Payload too short: %d bytes", len(incomingPayload))
+		return nil, nil, fmt.Errorf("payload too short: %d bytes", len(incomingPayload))
+	}
+
 	// Decrypt the first half of DH keypair E(g^x1) using our private onion key
-	remotePublicKeyBytes, err := rsa.DecryptOAEP(sha256.New(), rand.Reader, privateOnionKey.Private, incomingPayload, nil)
+	remotePublicKeyBytes, err := rsa.DecryptOAEP(sha256.New(), rand.Reader, privateOnionKey.Private, incomingPayload[:rsaCiphertextSize], nil)
 	if err != nil {
+		n.log.Error().Err(err).Msg("Failed to decrypt handshake")
 		return nil, nil, fmt.Errorf("failed to decrypt handshake: %w", err)
 	}
 
