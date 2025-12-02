@@ -543,14 +543,49 @@ func (n *node) HandleRelayExtendedAsOP(relayCell RelayCell) error {
 
 // SendExtendToHop sends a RelayExtend cell to extend the circuit to the next hop
 func (n *node) SendExtendToHop(cc *ClientCircuit, nextHop string) error {
-	// TODO: When crypto is added, encrypt the relay cell with layers for each hop
+	// Get the public onion key for the next hop
+	nextHopPublicKey, err := n.GetPeerPublicOnionKey(nextHop)
+	if err != nil {
+		return fmt.Errorf("failed to get onion key for %s: %w", nextHop, err)
+	}
 
+	// Create the Diffie-Hellman handshake payload encrypted with next hop's public key
+	n.log.Info().Str("nextHop", nextHop).Msg("Beginning handshake with next hop using RelayExtend")
+	handshakePayload, _, err := n.BeginHandshake(nextHopPublicKey)
+	if err != nil {
+		return fmt.Errorf("failed to begin handshake with %s: %w", nextHop, err)
+	}
+
+	// Build the RELAY EXTEND payload: address length (2 bytes) + address + encrypted handshake
+	// Format: [addrLen(2)][address][encryptedHandshake]
+	addrBytes := []byte(nextHop)
+	addrLen := uint16(len(addrBytes))
+
+	payloadBuf := make([]byte, 2+len(addrBytes)+len(handshakePayload))
+	payloadBuf[0] = byte(addrLen >> 8)
+	payloadBuf[1] = byte(addrLen)
+	copy(payloadBuf[2:], addrBytes)
+	copy(payloadBuf[2+len(addrBytes):], handshakePayload)
+
+	// Encrypt the relay cell payload with the shared key from the first hop
+	crypto, exists := n.circuitCryptoStates[cc.CircID]
+	if !exists {
+		return fmt.Errorf("no crypto state found for circuit %d", cc.CircID)
+	}
+
+	encryptedPayload, digest, err := EncryptRelayPayload(crypto, DirectionForward, payloadBuf)
+	if err != nil {
+		return fmt.Errorf("failed to encrypt relay cell: %w", err)
+	}
+
+	// Build the relay cell with the complete payload
 	relayCell := RelayCell{
 		CircID:   cc.CircID,
 		StreamID: 0,
 		Command:  RelayExtend,
-		Data:     []byte(nextHop),
-		Length:   uint16(len(nextHop)),
+		Digest:   digest,
+		Data:     encryptedPayload,
+		Length:   uint16(len(encryptedPayload)),
 	}
 
 	cell, err := n.EncodeRelayCell(relayCell)
