@@ -97,17 +97,7 @@ func (n *node) HandleCreated(cell Cell, src string) error {
 	_, isClientCircuit := n.clientCircuits[cell.CircID]
 	n.clientCircuitsMu.RUnlock()
 
-	// Doesn't matter if we are OP or relay, we need to complete the handshake
-	circuitCryptoState, err := n.FinishHandshakeAsInitiator(n.diffieHellmanHandshakePairs[cell.CircID], cell.Payload[:])
-	if err != nil {
-		return fmt.Errorf("failed to complete handshake for circuit %d from %s: %w", cell.CircID, src, err)
-	}
-
-	// Store the crypto state for this circuit
-	n.circuitCryptoStates[cell.CircID] = circuitCryptoState
-	// At this point the handshake is complete and keys are derived
-
-	// If this is for a client circuit, handle accordingly
+	n.log.Info().Str("src", src).Uint16("circID", cell.CircID).Msg("Handling Created cell")
 
 	if isClientCircuit {
 		return n.HandleCreatedAsOP(cell, src)
@@ -132,12 +122,22 @@ func (n *node) HandleCreated(cell Cell, src string) error {
 	targetCirc.State = "established"
 	n.log.Info().Str("peer", src).Uint16("circID", cell.CircID).Msg("Circuit established")
 
+	// Forward the payload of CREATED back to PrevHop after encrypting it with the shared key
+	// NOTE: In reality, the cell payload is of Relay Cell sized. So we need to truncate it accordingly
+	relayPayloadCipherText, digest, err := EncryptRelayPayload(n.circuitCryptoStates[targetCirc.InCircID], DirectionBackward, cell.Payload[:RelayPayloadLen])
+
+	if err != nil {
+		return err
+	}
+
 	if targetCirc.PrevHop != "" {
 		relayPayload := RelayCell{
 			CircID:   targetCirc.InCircID,
 			StreamID: 0,
 			Command:  RelayExtended,
-			Data:     []byte{},
+			Digest:   digest,
+			Length:   uint16(len(relayPayloadCipherText)),
+			Data:     relayPayloadCipherText,
 		}
 
 		cellToSend, err := n.EncodeRelayCell(relayPayload)
@@ -429,10 +429,23 @@ func (n *node) HandleCreatedAsOP(cell Cell, src string) error {
 	n.clientCircuitsMu.Lock()
 	defer n.clientCircuitsMu.Unlock()
 
+	// Complete the handshake as the initiator
+	n.log.Info().Str("src", src).Uint16("circID", cell.CircID).Msg("Completing handshake as initiator")
+	circuitCryptoState, err := n.FinishHandshakeAsInitiator(n.diffieHellmanHandshakePairs[cell.CircID], cell.Payload[:])
+	if err != nil {
+		return fmt.Errorf("failed to complete handshake for circuit %d from %s: %w", cell.CircID, src, err)
+	}
+
+	// Store the crypto state for this circuit
+	n.circuitCryptoStates[cell.CircID] = circuitCryptoState
+	// At this point the handshake is complete and keys are derived
+
 	cc, exists := n.clientCircuits[cell.CircID]
 	if !exists {
 		return fmt.Errorf("received Created for unknown client circuit %d", cell.CircID)
 	}
+
+	n.log.Info().Str("peer", src).Uint16("circID", cell.CircID).Msg("Circuit established")
 
 	// Verify it came from the expected hop
 	if cc.State == CircuitStateCreating && src == cc.Hops[0] {
