@@ -97,6 +97,18 @@ func (n *node) HandleCreated(cell Cell, src string) error {
 	_, isClientCircuit := n.clientCircuits[cell.CircID]
 	n.clientCircuitsMu.RUnlock()
 
+	// Doesn't matter if we are OP or relay, we need to complete the handshake
+	circuitCryptoState, err := n.FinishHandshakeAsInitiator(n.diffieHellmanHandshakePairs[cell.CircID], cell.Payload[:])
+	if err != nil {
+		return fmt.Errorf("failed to complete handshake for circuit %d from %s: %w", cell.CircID, src, err)
+	}
+
+	// Store the crypto state for this circuit
+	n.circuitCryptoStates[cell.CircID] = circuitCryptoState
+	// At this point the handshake is complete and keys are derived
+
+	// If this is for a client circuit, handle accordingly
+
 	if isClientCircuit {
 		return n.HandleCreatedAsOP(cell, src)
 	}
