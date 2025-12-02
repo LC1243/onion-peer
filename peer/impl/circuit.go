@@ -250,7 +250,34 @@ func (n *node) HandleBackwardRelay(cell Cell, circ *Circuit) error {
 
 // HandleRelayExtend handles a RelayExtend command
 func (n *node) HandleRelayExtend(relayCell RelayCell, circ *Circuit) error {
-	target := string(relayCell.Data)
+
+	// First Decrypt the relay payload
+	crypto, exists := n.circuitCryptoStates[circ.InCircID]
+	if !exists {
+		return fmt.Errorf("no crypto state found for circuit %d", circ.InCircID)
+	}
+
+	plaintext, err := DecryptRelayPayload(crypto, DirectionForward, relayCell.Data, relayCell.Digest)
+	if err != nil {
+		return fmt.Errorf("failed to decrypt RelayExtend payload: %w", err)
+	}
+
+	// Extract the handshake data from the plaintext
+	// Format: [addrLen(2)][address][encryptedHandshake]
+	if len(plaintext) < 2 {
+		return errors.New("invalid RelayExtend payload")
+	}
+
+	// Parse the target address from the plaintext
+	targetLen := (uint16(plaintext[0]) << 8) | uint16(plaintext[1])
+	if targetLen == 0 || int(targetLen)+2 > len(plaintext) {
+		return errors.New("invalid target length in RelayExtend")
+	}
+
+	// Extract the encrypted handshake data after the address
+	handshakePayload := plaintext[2+targetLen:]
+
+	target := string(plaintext[2 : 2+targetLen])
 	if target == "" {
 		return errors.New("empty target in RelayExtend")
 	}
@@ -279,9 +306,13 @@ func (n *node) HandleRelayExtend(relayCell RelayCell, circ *Circuit) error {
 
 	n.log.Info().Str("target", target).Uint16("newCircID", newID).Msg("Extending circuit")
 
+	var payload [CellPayloadLen]byte
+	copy(payload[:], handshakePayload)
+
 	createCell := Cell{
 		CircID:  newID,
 		Command: Create,
+		Payload: payload,
 	}
 	return n.SendCell(target, createCell)
 }
