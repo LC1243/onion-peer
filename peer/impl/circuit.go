@@ -511,6 +511,8 @@ func (n *node) HandleRelayExtendedAsOP(relayCell RelayCell) error {
 	switch cc.State {
 	case CircuitStateExtending1:
 		// Middle responded, now extend to Exit
+		// TODO: Extend to Exit Node
+		// TODO: This requires double encryption of the payloads
 		cc.State = CircuitStateExtending2
 		n.log.Info().Uint16("circID", circID).Msg("Middle connected, extending to Exit")
 		return n.SendExtendToHop(cc, cc.Hops[2])
