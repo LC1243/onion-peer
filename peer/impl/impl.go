@@ -132,8 +132,9 @@ type node struct {
 
 	// NOTE: Maybe they can be added to the Circuit struct
 	diffieHellmanHandshakePairs map[uint16]*DiffieHellmanHandshakePairs // Pending handshakes by circuit ID
-	circuitCryptoStates         map[uint16][]*CircuitCryptoState        // Crypto states per circuit ID. Each Circuit ID has multiple Crypto States, one per hop
-	cryptoStatesMu              sync.Mutex                              // Protects circuitCryptoStates
+	// Crypto states per circuit ID. Each Circuit ID has multiple Crypto States, one per hop
+	circuitCryptoStates map[uint16][]*CircuitCryptoState
+	cryptoStatesMu      sync.Mutex // Protects circuitCryptoStates
 }
 
 // Start implements peer.Service
