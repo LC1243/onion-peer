@@ -75,8 +75,8 @@ func (n *node) HandleCreate(cell Cell, src string) error {
 		return fmt.Errorf("handshake failed for circuit %d from %s: %w", cell.CircID, src, err)
 	}
 
-	// Store the crypto state for this circuit
-	n.circuitCryptoStates[cell.CircID] = crypto
+	// Store the crypto state for this circuit, for this hop
+	n.circuitCryptoStates[cell.CircID] = []*CircuitCryptoState{crypto}
 
 	// Prepare the payload for Created
 	var payload [CellPayloadLen]byte
@@ -128,7 +128,11 @@ func (n *node) HandleCreated(cell Cell, src string) error {
 
 	// Forward the payload of CREATED back to PrevHop after encrypting it with the shared key
 	// NOTE: In reality, the cell payload is of Relay Cell sized. So we need to truncate it accordingly
-	relayPayloadCipherText, digest, err := EncryptRelayPayload(n.circuitCryptoStates[targetCirc.InCircID], DirectionBackward, cell.Payload[:RelayPayloadLen])
+	cryptoStates := n.circuitCryptoStates[targetCirc.InCircID]
+	if len(cryptoStates) == 0 {
+		return fmt.Errorf("no crypto state found for circuit %d", targetCirc.InCircID)
+	}
+	relayPayloadCipherText, digest, err := EncryptRelayPayload(cryptoStates[0], DirectionBackward, cell.Payload[:RelayPayloadLen])
 
 	if err != nil {
 		return err
@@ -475,7 +479,7 @@ func (n *node) HandleCreatedAsOP(cell Cell, src string) error {
 	}
 
 	// Store the crypto state for this circuit
-	n.circuitCryptoStates[cell.CircID] = circuitCryptoState
+	n.circuitCryptoStates[cell.CircID] = []*CircuitCryptoState{circuitCryptoState}
 	// At this point the handshake is complete and keys are derived
 
 	cc, exists := n.clientCircuits[cell.CircID]
@@ -521,8 +525,11 @@ func (n *node) HandleRelayExtendedAsOP(relayCell RelayCell) error {
 
 		// At this point the Payload of EXTENDED should have the second half of the handshake
 		// So decrypt the payload add complete the handshake
-		// FIXME: Forward or Backward direction?
-		relayExtendedPayloadPlainText, err := DecryptRelayPayload(n.circuitCryptoStates[cc.CircID], DirectionForward, relayCell.Data, relayCell.Digest)
+		cryptoStates := n.circuitCryptoStates[cc.CircID]
+		if len(cryptoStates) == 0 {
+			return fmt.Errorf("no crypto states found for circuit %d", circID)
+		}
+		relayExtendedPayloadPlainText, err := DecryptRelayPayload(cryptoStates[0], DirectionBackward, relayCell.Data, relayCell.Digest)
 		if err != nil {
 			return fmt.Errorf("failed to decrypt relay extended payload for circuit %d: %w", circID, err)
 		}
@@ -533,8 +540,8 @@ func (n *node) HandleRelayExtendedAsOP(relayCell RelayCell) error {
 			return fmt.Errorf("failed to complete handshake for circuit %d at Exit: %w", circID, err)
 		}
 
-		// Store the crypto state for this circuit
-		n.circuitCryptoStates[cc.CircID] = circuitCryptoState
+		// Append the middle hop crypto state to the slice
+		n.circuitCryptoStates[cc.CircID] = append(n.circuitCryptoStates[cc.CircID], circuitCryptoState)
 
 		cc.State = CircuitStateExtending2
 		n.log.Info().Uint16("circID", circID).Msg("Middle connected, extending to Exit")
@@ -581,13 +588,14 @@ func (n *node) SendExtendToHop(cc *ClientCircuit, nextHop string) error {
 	copy(payloadBuf[2:], addrBytes)
 	copy(payloadBuf[2+len(addrBytes):], handshakePayload)
 
-	// Encrypt the relay cell payload with the shared key from the first hop
-	crypto, exists := n.circuitCryptoStates[cc.CircID]
-	if !exists {
-		return fmt.Errorf("no crypto state found for circuit %d", cc.CircID)
+	// Encrypt the relay cell payload with onion encryption (all hops so far)
+	cryptoStates := n.circuitCryptoStates[cc.CircID]
+	if len(cryptoStates) == 0 {
+		return fmt.Errorf("no crypto states found for circuit %d", cc.CircID)
 	}
 
-	encryptedPayload, digest, err := EncryptRelayPayload(crypto, DirectionForward, payloadBuf)
+	// Apply onion encryption: encrypt with each hop's key in reverse order
+	encryptedPayload, digest, err := EncryptRelayCellThroughCircuit(cryptoStates, payloadBuf)
 	if err != nil {
 		return fmt.Errorf("failed to encrypt relay cell: %w", err)
 	}

@@ -52,7 +52,7 @@ func NewPeer(conf peer.Configuration) peer.Peer {
 	// Initialize crypto state
 	n.peerOnionKeys = make(map[string]*rsa.PublicKey)
 	n.diffieHellmanHandshakePairs = make(map[uint16]*DiffieHellmanHandshakePairs)
-	n.circuitCryptoStates = make(map[uint16]*CircuitCryptoState)
+	n.circuitCryptoStates = make(map[uint16][]*CircuitCryptoState)
 
 	// Generate onion keypair for this node
 	// Note: In production, this should be loaded from persistent storage
@@ -132,7 +132,7 @@ type node struct {
 
 	// NOTE: Maybe they can be added to the Circuit struct
 	diffieHellmanHandshakePairs map[uint16]*DiffieHellmanHandshakePairs // Pending handshakes by circuit ID
-	circuitCryptoStates         map[uint16]*CircuitCryptoState          // Crypto state per circuit ID
+	circuitCryptoStates         map[uint16][]*CircuitCryptoState        // Crypto states per circuit ID. Each Circuit ID has multiple Crypto States, one per hop
 	cryptoStatesMu              sync.Mutex                              // Protects circuitCryptoStates
 }
 
