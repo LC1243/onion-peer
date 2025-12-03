@@ -210,6 +210,9 @@ func Test_TOR_Circuit_Destroy_ClientInitiated_Success(t *testing.T) {
 	// Give them time to exchange routing information
 	time.Sleep(100 * time.Millisecond)
 
+	// Populate onion public keys for all nodes
+	populateOnionKeys(nodes)
+
 	hops := [3]string{guard.GetAddr(), middle.GetAddr(), exit.GetAddr()}
 
 	// Build the circuit with a 5 second timeout
@@ -271,6 +274,9 @@ func Test_TOR_Circuit_Destroy_RelayInitiated_Success(t *testing.T) {
 
 	// Give them time to exchange routing information
 	time.Sleep(100 * time.Millisecond)
+
+	// Populate onion public keys for all nodes
+	populateOnionKeys(nodes)
 
 	hops := [3]string{guard.GetAddr(), middle.GetAddr(), exit.GetAddr()}
 
@@ -349,6 +355,10 @@ func Test_TOR_Circuit_Cleanup_ClientInitiated_Success(t *testing.T) {
 	}
 
 	time.Sleep(100 * time.Millisecond)
+
+	// Populate onion public keys for all nodes
+	populateOnionKeys(nodes1)
+	populateOnionKeys(nodes2)
 
 	hops1 := [3]string{guard1.GetAddr(), middle.GetAddr(), exit1.GetAddr()}
 	hops2 := [3]string{guard2.GetAddr(), middle.GetAddr(), exit2.GetAddr()}

@@ -15,7 +15,6 @@ type Circuit struct {
 	OutCircID uint16
 	NextHop   string
 	State     string // "pending", "established"
-	// TODO: Add crypto keys here
 }
 
 type circuitKey struct {
@@ -41,7 +40,6 @@ type ClientCircuit struct {
 	State     ClientCircuitState // Current state machine state
 	ReadyChan chan struct{}      // Closed when circuit is ready
 	Error     error              // Set if circuit creation fails
-	// TODO: Add session keys for each hop here
 }
 
 // -----------------------------------------------------------------------------
@@ -133,7 +131,11 @@ func (n *node) HandleCreated(cell Cell, src string) error {
 	if len(cryptoStates) == 0 {
 		return fmt.Errorf("no crypto state found for circuit %d", targetCirc.InCircID)
 	}
-	relayPayloadCipherText, digest, err := EncryptRelayPayload(cryptoStates[0], DirectionBackward, cell.Payload[:RelayPayloadLen])
+	relayPayloadCipherText, digest, err := EncryptRelayPayload(
+		cryptoStates[0],
+		DirectionBackward,
+		cell.Payload[:RelayPayloadLen],
+	)
 
 	if err != nil {
 		return err
@@ -554,13 +556,21 @@ func (n *node) HandleRelayExtendedAsOP(relayCell RelayCell) error {
 		if len(cryptoStates) == 0 {
 			return fmt.Errorf("no crypto states found for circuit %d", circID)
 		}
-		relayExtendedPayloadPlainText, err := DecryptRelayPayload(cryptoStates[0], DirectionBackward, relayCell.Data, relayCell.Digest)
+		relayExtendedPayloadPlainText, err := DecryptRelayPayload(
+			cryptoStates[0],
+			DirectionBackward,
+			relayCell.Data,
+			relayCell.Digest,
+		)
 		if err != nil {
 			return fmt.Errorf("failed to decrypt relay extended payload for circuit %d: %w", circID, err)
 		}
 
 		// Complete the handshake as the initiator for the Middle node
-		circuitCryptoState, err := n.FinishHandshakeAsInitiator(n.diffieHellmanHandshakePairs[cc.CircID], relayExtendedPayloadPlainText)
+		circuitCryptoState, err := n.FinishHandshakeAsInitiator(
+			n.diffieHellmanHandshakePairs[cc.CircID],
+			relayExtendedPayloadPlainText,
+		)
 		if err != nil {
 			return fmt.Errorf("failed to complete handshake for circuit %d at Middle: %w", circID, err)
 		}

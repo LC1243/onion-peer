@@ -103,7 +103,13 @@ func GenerateOnionKeyPair() (*OnionKeyPair, error) {
 
 // Initiates the handshake from the initiator side
 // Called by the origin node when sending a CREATE/EXTEND cell
-func (n *node) BeginHandshake(publicOnionKey *rsa.PublicKey) (outgoingPayload []byte, state *DiffieHellmanHandshakePairs, err error) {
+func (n *node) BeginHandshake(
+	publicOnionKey *rsa.PublicKey,
+) (
+	outgoingPayload []byte,
+	state *DiffieHellmanHandshakePairs,
+	err error,
+) {
 	var privateKey, publicKey [32]byte
 
 	// Generate private key
@@ -131,7 +137,14 @@ func (n *node) BeginHandshake(publicOnionKey *rsa.PublicKey) (outgoingPayload []
 
 // Completes the handshake from the responder side
 // Called by the relay node after receiving a CREATE/EXTEND cell.
-func (n *node) CompleteHandshakeAsResponder(privateOnionKey *OnionKeyPair, incomingPayload []byte) (responsePayload []byte, crypto *CircuitCryptoState, err error) {
+func (n *node) CompleteHandshakeAsResponder(
+	privateOnionKey *OnionKeyPair,
+	incomingPayload []byte,
+) (
+	responsePayload []byte,
+	crypto *CircuitCryptoState,
+	err error,
+) {
 	// Extract only the actual ciphertext
 	const rsaCiphertextSize = 256
 	if len(incomingPayload) < rsaCiphertextSize {
@@ -140,7 +153,13 @@ func (n *node) CompleteHandshakeAsResponder(privateOnionKey *OnionKeyPair, incom
 	}
 
 	// Decrypt the first half of DH keypair E(g^x1) using our private onion key
-	remotePublicKeyBytes, err := rsa.DecryptOAEP(sha256.New(), rand.Reader, privateOnionKey.Private, incomingPayload[:rsaCiphertextSize], nil)
+	remotePublicKeyBytes, err := rsa.DecryptOAEP(
+		sha256.New(),
+		rand.Reader,
+		privateOnionKey.Private,
+		incomingPayload[:rsaCiphertextSize],
+		nil,
+	)
 	if err != nil {
 		n.log.Error().Err(err).Msg("Failed to decrypt handshake")
 		return nil, nil, fmt.Errorf("failed to decrypt handshake: %w", err)
@@ -164,8 +183,12 @@ func (n *node) CompleteHandshakeAsResponder(privateOnionKey *OnionKeyPair, incom
 	curve25519.ScalarBaseMult(&publicKey, &privateKey)
 
 	// Compute shared secret K = DH(our_private, remote_public)
+	sharedSecretBytes, err := curve25519.X25519(privateKey[:], remotePublicKey[:])
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to compute shared secret: %w", err)
+	}
 	var sharedSecret [32]byte
-	curve25519.ScalarMult(&sharedSecret, &privateKey, &remotePublicKey)
+	copy(sharedSecret[:], sharedSecretBytes)
 
 	// Generate AES ciphers and digests from shared secret
 	crypto, err = generateCircuitKeys(sharedSecret[:])
@@ -188,7 +211,13 @@ func (n *node) CompleteHandshakeAsResponder(privateOnionKey *OnionKeyPair, incom
 
 // Completes the handshake from the initiator side.
 // Called by the origin node after receiving a CREATED/EXTENDED cell.
-func (n *node) FinishHandshakeAsInitiator(state *DiffieHellmanHandshakePairs, responsePayload []byte) (*CircuitCryptoState, error) {
+func (n *node) FinishHandshakeAsInitiator(
+	state *DiffieHellmanHandshakePairs,
+	responsePayload []byte,
+) (
+	*CircuitCryptoState,
+	error,
+) {
 	if len(responsePayload) < 64 {
 		return nil, fmt.Errorf("invalid response payload length: %d", len(responsePayload))
 	}
@@ -199,8 +228,12 @@ func (n *node) FinishHandshakeAsInitiator(state *DiffieHellmanHandshakePairs, re
 	receivedHash := responsePayload[32:64]
 
 	// Compute shared secret K = DH(our_private, remote_public)
+	sharedSecretBytes, err := curve25519.X25519(state.PrivateKey[:], remotePublicKey[:])
+	if err != nil {
+		return nil, fmt.Errorf("failed to compute shared secret: %w", err)
+	}
 	var sharedSecret [32]byte
-	curve25519.ScalarMult(&sharedSecret, &state.PrivateKey, &remotePublicKey)
+	copy(sharedSecret[:], sharedSecretBytes)
 
 	// Verify handshake hash
 	h := sha256.New()
@@ -272,7 +305,15 @@ func newAESCTRStream(key []byte) (cipher.Stream, error) {
 
 // Encrypts a relay cell payload
 // Called when sending data through a circuit
-func EncryptRelayPayload(crypto *CircuitCryptoState, direction Direction, payload []byte) (ciphertext []byte, digest [6]byte, err error) {
+func EncryptRelayPayload(
+	crypto *CircuitCryptoState,
+	direction Direction,
+	payload []byte,
+) (
+	ciphertext []byte,
+	digest [6]byte,
+	err error,
+) {
 	if crypto == nil {
 		return nil, digest, errors.New("crypto state is nil")
 	}
@@ -305,7 +346,15 @@ func EncryptRelayPayload(crypto *CircuitCryptoState, direction Direction, payloa
 
 // Decrypts a relay cell payload
 // Called when receiving data through a circuit
-func DecryptRelayPayload(crypto *CircuitCryptoState, direction Direction, ciphertext []byte, expectedDigest [6]byte) (plaintext []byte, err error) {
+func DecryptRelayPayload(
+	crypto *CircuitCryptoState,
+	direction Direction,
+	ciphertext []byte,
+	expectedDigest [6]byte,
+) (
+	plaintext []byte,
+	err error,
+) {
 	if crypto == nil {
 		return nil, errors.New("crypto state is nil")
 	}
@@ -343,7 +392,14 @@ func DecryptRelayPayload(crypto *CircuitCryptoState, direction Direction, cipher
 
 // Applies multiple layers of encryption to a relay cell payload
 // Called by the origin node when sending a relay cell through a circuit
-func EncryptRelayCellThroughCircuit(cryptoStates []*CircuitCryptoState, payload []byte) (ciphertext []byte, digest [6]byte, err error) {
+func EncryptRelayCellThroughCircuit(
+	cryptoStates []*CircuitCryptoState,
+	payload []byte,
+) (
+	ciphertext []byte,
+	digest [6]byte,
+	err error,
+) {
 	if len(cryptoStates) == 0 {
 		return nil, digest, errors.New("no crypto states provided")
 	}
@@ -370,14 +426,23 @@ func EncryptRelayCellThroughCircuit(cryptoStates []*CircuitCryptoState, payload 
 
 // Decrypts a relay cell payload
 // Called by an intermediate or exit node when receiving a relay cell
-func DecryptRelayCellAtHop(crypto *CircuitCryptoState, direction Direction, ciphertext []byte, expectedDigest [6]byte) (plaintext []byte, isForUs bool, err error) {
+func DecryptRelayCellAtHop(
+	crypto *CircuitCryptoState,
+	direction Direction,
+	ciphertext []byte,
+	expectedDigest [6]byte,
+) (
+	plaintext []byte,
+	isForUs bool,
+) {
 	// Try to decrypt
-	plaintext, err = DecryptRelayPayload(crypto, direction, ciphertext, expectedDigest)
-	if err != nil {
+	var decryptErr error
+	plaintext, decryptErr = DecryptRelayPayload(crypto, direction, ciphertext, expectedDigest)
+	if decryptErr != nil {
 		// Digest mismatch: this cell is not for us, so just forward it
-		return ciphertext, false, nil
+		return ciphertext, false
 	}
 
 	// Digest matched: this cell is for us
-	return plaintext, true, nil
+	return plaintext, true
 }
