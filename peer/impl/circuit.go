@@ -15,7 +15,6 @@ type Circuit struct {
 	OutCircID uint16
 	NextHop   string
 	State     string // "pending", "established"
-	// TODO: Add crypto keys here
 }
 
 type circuitKey struct {
@@ -41,7 +40,6 @@ type ClientCircuit struct {
 	State     ClientCircuitState // Current state machine state
 	ReadyChan chan struct{}      // Closed when circuit is ready
 	Error     error              // Set if circuit creation fails
-	// TODO: Add session keys for each hop here
 }
 
 // -----------------------------------------------------------------------------
