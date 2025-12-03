@@ -541,13 +541,8 @@ func (n *node) HandleRelayExtendedAsOP(relayCell RelayCell) error {
 	switch cc.State {
 	case CircuitStateExtending1:
 		// Middle responded, now extend to Exit
-		// TODO: Extend to Exit Node
-		// TODO: This requires double encryption of the payloads
-		cc.State = CircuitStateExtending2
-		n.log.Info().Uint16("circID", circID).Msg("Middle connected, extending to Exit")
-		return n.SendExtendToHop(cc, cc.Hops[2])
 
-	case CircuitStateExtending2:
+		n.log.Info().Uint16("circID", circID).Msg("Middle Responded, Finishing handshake for Middle")
 
 		// At this point the Payload of EXTENDED should have the second half of the handshake
 		// So decrypt the payload add complete the handshake
@@ -598,10 +593,15 @@ func (n *node) SendExtendToHop(cc *ClientCircuit, nextHop string) error {
 
 	// Create the Diffie-Hellman handshake payload encrypted with next hop's public key
 	n.log.Info().Str("nextHop", nextHop).Msg("Beginning handshake with next hop using RelayExtend")
-	handshakePayload, _, err := n.BeginHandshake(nextHopPublicKey)
+	handshakePayload, handshakeState, err := n.BeginHandshake(nextHopPublicKey)
 	if err != nil {
 		return fmt.Errorf("failed to begin handshake with %s: %w", nextHop, err)
 	}
+
+	// Store the handshake state for later use when processing the EXTENDED cell
+	n.cryptoStatesMu.Lock()
+	n.diffieHellmanHandshakePairs[cc.CircID] = handshakeState
+	n.cryptoStatesMu.Unlock()
 
 	// Build the RELAY EXTEND payload: address length (2 bytes) + address + encrypted handshake
 	// Format: [addrLen(2)][address][encryptedHandshake]
