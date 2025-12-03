@@ -30,6 +30,23 @@ type Tor interface {
 	// AddPeerOnionKey stores a remote peer's public onion key.
 	// This is used to encrypt CREATE/EXTEND cells to that peer.
 	AddPeerOnionKey(peerAddr string, pubKey any)
+	// DestroyCircuit tears down the circuit with the given ID.
+	// Returns an error if the circuit does not exist or teardown fails.
+	DestroyCircuit(circuitID uint16) error
+
+	// RelayDestroyCircuit is called by a relay to destroy a circuit initiated
+	// by another peer. src is the address of the previous or next hop and allows
+	// the relay to identify which circuit to destroy.
+	RelayDestroyCircuit(circID uint16, src string) error
+
+	// CleanupAllCircuits tears down all active circuits managed by the peer
+	CleanupAllCircuits()
+
+	// GetCircuitsNbr returns the number of active relay circuits managed by the peer.
+	GetCircuitsNbr() int
+
+	// GetClientCircuitsNbr returns the number of active client circuits managed by the peer.
+	GetClientCircuitsNbr() int
 }
 
 // Factory is the type of function we are using to create new instances of
