@@ -1,6 +1,7 @@
 package impl
 
 import (
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"math/rand"
@@ -305,6 +306,7 @@ func (n *node) HandleRelayExtend(relayCell RelayCell, circ *Circuit) error {
 	// Parse the target address from the plaintext
 	targetLen := (uint16(plaintext[0]) << 8) | uint16(plaintext[1])
 	if targetLen == 0 || int(targetLen)+2 > len(plaintext) {
+		n.log.Error().Str("targetLen", fmt.Sprintf("%d", targetLen)).Msg("Invalid target length in RelayExtend")
 		return errors.New("invalid target length in RelayExtend")
 	}
 
@@ -538,6 +540,8 @@ func (n *node) HandleRelayExtendedAsOP(relayCell RelayCell) error {
 		return fmt.Errorf("received RelayExtended for unknown client circuit %d", circID)
 	}
 
+	n.log.Info().Uint16("circID", circID).Msg("Handling RelayExtended in OP")
+
 	switch cc.State {
 	case CircuitStateExtending1:
 		// Middle responded, now extend to Exit
@@ -555,10 +559,10 @@ func (n *node) HandleRelayExtendedAsOP(relayCell RelayCell) error {
 			return fmt.Errorf("failed to decrypt relay extended payload for circuit %d: %w", circID, err)
 		}
 
-		// Complete the handshake as the initiator for the Exit node
+		// Complete the handshake as the initiator for the Middle node
 		circuitCryptoState, err := n.FinishHandshakeAsInitiator(n.diffieHellmanHandshakePairs[cc.CircID], relayExtendedPayloadPlainText)
 		if err != nil {
-			return fmt.Errorf("failed to complete handshake for circuit %d at Exit: %w", circID, err)
+			return fmt.Errorf("failed to complete handshake for circuit %d at Middle: %w", circID, err)
 		}
 
 		// Append the middle hop crypto state to the slice
