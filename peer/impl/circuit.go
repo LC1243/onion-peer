@@ -227,12 +227,31 @@ func (n *node) HandleRelayForwarding(cell Cell, src string) error {
 
 // HandleForwardRelay handles a relay cell going forward (PrevHop -> NextHop)
 func (n *node) HandleForwardRelay(cell Cell, circ *Circuit) error {
+	// As the relay cell is always encrypted, it needs to be decrypted first before further processing
+	// It goes for all kinds of relay cells: EXTEND, EXTENDED, etc.
+
+	//  Decode the relay cell
+	relayCell, err := n.DecodeRelayCell(cell)
+	if err != nil {
+		return err
+	}
+
+	// Get crypto state for this circuit
+	cryptoStates := n.circuitCryptoStates[circ.InCircID]
+	if len(cryptoStates) == 0 {
+		return fmt.Errorf("no crypto state found for circuit %d", circ.InCircID)
+	}
+
+	// Decrypt one layer using our crypto state
+	decryptedData, err := DecryptRelayPayload(cryptoStates[0], DirectionForward, relayCell.Data, relayCell.Digest)
+	if err != nil {
+		return fmt.Errorf("failed to decrypt relay cell data: %w", err)
+	}
+
 	if circ.NextHop == "" {
 		// We are the end of the circuit, process the relay command
-		relayCell, err := n.DecodeRelayCell(cell)
-		if err != nil {
-			return err
-		}
+		// Replace the encrypted Data with decrypted plaintext
+		relayCell.Data = decryptedData
 
 		switch relayCell.Command {
 		case RelayExtend:
@@ -244,9 +263,25 @@ func (n *node) HandleForwardRelay(cell Cell, circ *Circuit) error {
 		}
 	}
 
-	// Forward to NextHop
-	cell.CircID = circ.OutCircID
-	return n.SendCell(circ.NextHop, cell)
+	// We are an intermediate node, forward the decrypted data to NextHop
+	// Recompute digest for the decrypted data
+	h := sha256.New()
+	h.Write(cryptoStates[0].ForwardDigest)
+	h.Write(decryptedData)
+	hash := h.Sum(nil)
+	var newDigest [6]byte
+	copy(newDigest[:], hash[:6])
+
+	// Re-encode the relay cell with the decrypted data and new digest
+	relayCell.Data = decryptedData
+	relayCell.Digest = newDigest
+	relayCell.Length = uint16(len(decryptedData))
+	relayCell.CircID = circ.OutCircID
+	forwardCell, err := n.EncodeRelayCell(relayCell)
+	if err != nil {
+		return err
+	}
+	return n.SendCell(circ.NextHop, forwardCell)
 }
 
 // HandleBackwardRelay handles a relay cell going backward (NextHop -> PrevHop)
@@ -258,17 +293,8 @@ func (n *node) HandleBackwardRelay(cell Cell, circ *Circuit) error {
 
 // HandleRelayExtend handles a RelayExtend command
 func (n *node) HandleRelayExtend(relayCell RelayCell, circ *Circuit) error {
-
-	// First Decrypt the relay payload
-	crypto, exists := n.circuitCryptoStates[circ.InCircID]
-	if !exists {
-		return fmt.Errorf("no crypto state found for circuit %d", circ.InCircID)
-	}
-
-	plaintext, err := DecryptRelayPayload(crypto, DirectionForward, relayCell.Data, relayCell.Digest)
-	if err != nil {
-		return fmt.Errorf("failed to decrypt RelayExtend payload: %w", err)
-	}
+	// The relay cell Data has already been decrypted by HandleForwardRelay
+	plaintext := relayCell.Data
 
 	// Extract the handshake data from the plaintext
 	// Format: [addrLen(2)][address][encryptedHandshake]
