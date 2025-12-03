@@ -1,6 +1,7 @@
 package impl
 
 import (
+	"crypto/rsa"
 	"errors"
 	"fmt"
 	"os"
@@ -47,6 +48,22 @@ func NewPeer(conf peer.Configuration) peer.Peer {
 	n.ackWaiter = make(map[string]*ackWait)
 	n.circuits = make(map[circuitKey]*Circuit)
 	n.clientCircuits = make(map[uint16]*ClientCircuit)
+
+	// Initialize crypto state
+	n.peerOnionKeys = make(map[string]*rsa.PublicKey)
+	n.diffieHellmanHandshakePairs = make(map[uint16]*DiffieHellmanHandshakePairs)
+	n.circuitCryptoStates = make(map[uint16][]*CircuitCryptoState)
+
+	// Generate onion keypair for this node
+	// Note: In production, this should be loaded from persistent storage
+	// For now, we generate a new keypair each time
+	var err error
+	n.onionKey, err = GenerateOnionKeyPair()
+	if err != nil {
+		// Log error but don't fail initialization
+		// The node can still function without crypto features
+		n.log.Error().Err(err).Msg("Failed to generate onion keypair")
+	}
 
 	if conf.MessageRegistry != nil {
 		conf.MessageRegistry.RegisterMessageCallback(types.ChatMessage{}, n.execChatMessage)
@@ -107,6 +124,16 @@ type node struct {
 	// Tor client circuits (OP side)
 	clientCircuitsMu sync.RWMutex
 	clientCircuits   map[uint16]*ClientCircuit
+
+	// Cryptography for Tor-like onion routing
+	onionKey      *OnionKeyPair             // This node's long-term onion keypair
+	peerOnionKeys map[string]*rsa.PublicKey // Cached onion public keys for peers
+	peerKeysMu    sync.RWMutex              // Protects peerOnionKeys
+
+	// NOTE: Maybe they can be added to the Circuit struct
+	diffieHellmanHandshakePairs map[uint16]*DiffieHellmanHandshakePairs // Pending handshakes by circuit ID
+	circuitCryptoStates         map[uint16][]*CircuitCryptoState        // Crypto states per circuit ID. Each Circuit ID has multiple Crypto States, one per hop
+	cryptoStatesMu              sync.Mutex                              // Protects circuitCryptoStates
 }
 
 // Start implements peer.Service
@@ -321,4 +348,34 @@ func (n *node) ExecTorCell(m types.Message, pkt transport.Packet) error {
 
 	// Unknown command
 	return fmt.Errorf("unknown cell command %d", cell.Command)
+}
+
+// Get onion public key
+func (n *node) GetOnionPublicKey() interface{} {
+	if n.onionKey == nil {
+		return nil
+	}
+	return n.onionKey.Public
+}
+
+// AddPeerOnionKey stores a remote onion public key in the cache
+// This function is used to populate a map of IP addresses to onion public keys
+// In the future, this should be replaced with a persistent storage mechanism
+func (n *node) AddPeerOnionKey(peerAddr string, pubKey interface{}) {
+	n.peerKeysMu.Lock()
+	defer n.peerKeysMu.Unlock()
+	if rsaKey, ok := pubKey.(*rsa.PublicKey); ok {
+		n.peerOnionKeys[peerAddr] = rsaKey
+	}
+}
+
+// Retrieves a remote onion public key from the cache
+func (n *node) GetPeerPublicOnionKey(peerAddr string) (*rsa.PublicKey, error) {
+	n.peerKeysMu.RLock()
+	defer n.peerKeysMu.RUnlock()
+	pubKey, ok := n.peerOnionKeys[peerAddr]
+	if !ok {
+		return nil, fmt.Errorf("onion public key for peer %s not found", peerAddr)
+	}
+	return pubKey, nil
 }
