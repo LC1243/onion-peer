@@ -17,6 +17,28 @@ type Circuit struct {
 	State     string // "pending", "established"
 }
 
+// Stream definition
+type StreamState int
+
+const (
+	StreamInit StreamState = iota
+	StreamWaitingForConnected
+	StreamOpen
+	StreamClosed
+)
+
+type Stream struct {
+	ID     uint16
+	CircID uint16
+	State  StreamState
+
+	TargetAddr string // UDP connection (assumed for streams)
+}
+
+type CircuitStreams struct {
+	Streams map[uint16]*Stream // streamID -> Stream
+}
+
 type circuitKey struct {
 	PrevHop  string
 	InCircID uint16
@@ -191,6 +213,10 @@ func (n *node) HandleRelayAsOP(cell Cell, src string, cc *ClientCircuit) error {
 	switch relayCell.Command {
 	case RelayExtended:
 		return n.HandleRelayExtendedAsOP(relayCell)
+	case RelayConnected:
+		return n.HandleRelayConnectedAsOP(relayCell, cc)
+	case RelayEnd:
+		return n.HandleRelayEndAsOP(relayCell, cc)
 	default:
 		return fmt.Errorf("unexpected relay command %d for client circuit", relayCell.Command)
 	}
@@ -257,6 +283,10 @@ func (n *node) HandleForwardRelay(cell Cell, circ *Circuit) error {
 		relayCell.Data = decryptedData
 
 		switch relayCell.Command {
+		case RelayBegin:
+			return n.HandleRelayBegin(relayCell, circ)
+		case RelayEnd:
+			return n.HandleRelayEnd(relayCell, circ)
 		case RelayExtend:
 			return n.HandleRelayExtend(relayCell, circ)
 		case RelayExtended:
@@ -292,6 +322,76 @@ func (n *node) HandleBackwardRelay(cell Cell, circ *Circuit) error {
 	// Forward to PrevHop with the InCircID
 	cell.CircID = circ.InCircID
 	return n.SendCell(circ.PrevHop, cell)
+}
+
+// HandleRelayBegin opens a stream on a circuit
+func (n *node) HandleRelayBegin(relay RelayCell, circ *Circuit) error {
+	stream := &Stream{
+		ID:         relay.StreamID,
+		CircID:     circ.InCircID,
+		State:      StreamOpen,
+		TargetAddr: string(relay.Data),
+	}
+
+	n.AddStream(circ.InCircID, stream)
+
+	// Respond with RELAY_CONNECTED
+	return n.SendRelayConnected(circ, relay.StreamID)
+}
+
+func (n *node) SendRelayConnected(circ *Circuit, streamID uint16) error {
+	payload := []byte{} // empty body
+
+	encrypted, digest, err := EncryptRelayPayloadBackward(
+		n.circuitCryptoStates[circ.InCircID],
+		payload,
+	)
+	if err != nil {
+		return err
+	}
+
+	cell := RelayCell{
+		CircID:   circ.InCircID,
+		StreamID: streamID,
+		Command:  RelayConnected,
+		Digest:   digest,
+		Length:   uint16(len(encrypted)),
+		Data:     encrypted,
+	}
+
+	msg, _ := n.EncodeRelayCell(cell)
+	return n.SendCell(circ.PrevHop, msg)
+}
+
+// HandleRelayEnd closes a stream on a circuit
+func (n *node) HandleRelayEnd(relay RelayCell, circ *Circuit) error {
+	streams := n.GetCircuitStreams(circ.InCircID)
+	stream := streams.Streams[relay.StreamID]
+	if stream == nil {
+		return nil
+	}
+
+	stream.State = StreamClosed
+
+	return n.SendRelayEnd(circ, relay.StreamID)
+}
+
+func (n *node) SendRelayEnd(circ *Circuit, streamID uint16) error {
+	encrypted, digest, _ := EncryptRelayPayloadBackward(
+		n.circuitCryptoStates[circ.InCircID], []byte{},
+	)
+
+	relay := RelayCell{
+		CircID:   circ.InCircID,
+		StreamID: streamID,
+		Command:  RelayEnd,
+		Digest:   digest,
+		Length:   uint16(len(encrypted)),
+		Data:     encrypted,
+	}
+
+	realCell, _ := n.EncodeRelayCell(relay)
+	return n.SendCell(circ.PrevHop, realCell)
 }
 
 // HandleRelayExtend handles a RelayExtend command
@@ -597,6 +697,30 @@ func (n *node) HandleRelayExtendedAsOP(relayCell RelayCell) error {
 	}
 }
 
+// HandleRelayConnectedAsOP sets the stream as open
+func (n *node) HandleRelayConnectedAsOP(relay RelayCell, cc *ClientCircuit) error {
+	stream := n.GetStream(cc.CircID, relay.StreamID)
+	if stream == nil {
+		return fmt.Errorf("unknown stream %d", relay.StreamID)
+	}
+
+	stream.State = StreamOpen
+	return nil
+}
+
+// HandleRelayEndAsOP sets the stream as closed
+func (n *node) HandleRelayEndAsOP(relay RelayCell, cc *ClientCircuit) error {
+	streams := n.GetCircuitStreams(cc.CircID)
+	stream := streams.Streams[relay.StreamID]
+
+	if stream == nil {
+		return fmt.Errorf("unknown stream %d", relay.StreamID)
+	}
+
+	stream.State = StreamClosed
+	return nil
+}
+
 // SendExtendToHop sends a RelayExtend cell to extend the circuit to the next hop
 func (n *node) SendExtendToHop(cc *ClientCircuit, nextHop string) error {
 	// Get the public onion key for the next hop
@@ -731,6 +855,7 @@ func destroyCircuitAsClient(n *node, initiator bool, circID uint16) error {
 	n.clientCircuitsMu.Unlock()
 
 	n.CleanupClientCircuit(circID)
+	n.CleanupStreams(circID)
 	addr := n.conf.Socket.GetAddress()
 	n.log.Info().Str("peer", addr).Uint16("circID", circID).Msg("Destroyed client")
 	return nil
