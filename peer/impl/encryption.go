@@ -382,10 +382,9 @@ func DecryptRelayPayload(
 	hash := h.Sum(nil)
 	var actualDigest [6]byte
 	copy(actualDigest[:], hash[:6])
-	// TODO: Re-enable digest verification
-	// if !bytes.Equal(expectedDigest[:], actualDigest[:]) {
-	// 	return nil, errors.New("digest verification failed")
-	// }
+	if !bytes.Equal(expectedDigest[:], actualDigest[:]) {
+		return nil, errors.New("digest verification failed")
+	}
 
 	return plaintext, nil
 }

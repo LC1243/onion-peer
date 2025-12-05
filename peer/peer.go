@@ -3,6 +3,7 @@ package peer
 import (
 	"time"
 
+	"go.dedis.ch/cs438/peer/impl"
 	"go.dedis.ch/cs438/registry"
 	"go.dedis.ch/cs438/transport"
 )
@@ -47,6 +48,18 @@ type Tor interface {
 
 	// GetClientCircuitsNbr returns the number of active client circuits managed by the peer.
 	GetClientCircuitsNbr() int
+
+	// OpenStream opens a new RELAY_BEGIN stream to targetAddr over a ready circuit. Returns the new streamID.
+	OpenStream(circID uint16, targetAddr string) (uint16, error)
+
+	// CloseStream sends RELAY_END for a stream and marks it closed locally.
+	CloseStream(circID, streamID uint16) error
+
+	// GetStream returns a stream from the circuit's stream table
+	GetStream(circID uint16, streamID uint16) *impl.Stream
+
+	// GetCircuitStreams returns the streams table for a given circuit ID
+	GetCircuitStreams(circID uint16) *impl.CircuitStreams
 }
 
 // Factory is the type of function we are using to create new instances of

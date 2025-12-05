@@ -395,7 +395,16 @@ func (n *node) AddStream(circID uint16, stream *Stream) {
 	n.streamsMu.Unlock()
 }
 
-// GetStream returns a stream from the circuit's stream table'
+// DeleteStream deletes a stream to the circuit's stream table
+func (n *node) DeleteStream(circID uint16, stream *Stream) {
+	table := n.GetCircuitStreams(circID)
+
+	n.streamsMu.Lock()
+	delete(table.Streams, stream.ID)
+	n.streamsMu.Unlock()
+}
+
+// GetStream returns a stream from the circuit's stream table
 func (n *node) GetStream(circID uint16, streamID uint16) *Stream {
 	n.streamsMu.RLock()
 	table, ok := n.streamTables[circID]
