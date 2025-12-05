@@ -1143,3 +1143,42 @@ func (n *node) GetClientCircuitsNbr() int {
 	defer n.clientCircuitsMu.RUnlock()
 	return len(n.clientCircuits)
 }
+
+// HasStream reports whether a stream exists for a client circuit
+func (n *node) HasStream(circID, streamID uint16) bool {
+	n.streamsMu.RLock()
+	defer n.streamsMu.RUnlock()
+
+	table, ok := n.streamTables[circID]
+	if !ok {
+		return false
+	}
+	_, exists := table.Streams[streamID]
+	return exists
+}
+
+// ContainsStream reports whether a relay circuit contains a given stream
+func (n *node) ContainsStream(circID, streamID uint16) bool {
+	n.streamsMu.RLock()
+	defer n.streamsMu.RUnlock()
+
+	table, ok := n.streamTables[circID]
+	if !ok {
+		return false
+	}
+	_, exists := table.Streams[streamID]
+	return exists
+}
+
+// HasStreams returns true if the circuit has at least one active stream.
+func (n *node) HasStreams(circID uint16) bool {
+	n.streamsMu.RLock()
+	defer n.streamsMu.RUnlock()
+
+	table, ok := n.streamTables[circID]
+	if !ok {
+		return false
+	}
+
+	return len(table.Streams) > 0
+}

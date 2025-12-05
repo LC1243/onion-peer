@@ -77,10 +77,10 @@ func Test_TOR_Stream_Close_Clean_Shutdown(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 
 	// Confirm stream is fully removed on OP and Exit
-	require.Nil(t, client.Peer.GetStream(circID, streamID), "OP stream should be removed after handshake")
+	require.False(t, client.Peer.HasStream(circID, streamID), "OP stream should be removed after handshake")
 
-	exitTable := exit.Peer.GetCircuitStreams(circID)
-	require.NotContains(t, exitTable.Streams, streamID, "Exit stream should be gone")
+	contains := exit.Peer.ContainsStream(circID, streamID)
+	require.False(t, contains, "Exit stream should be gone")
 }
 
 // Test double-closing stream — second close must not crash
@@ -101,8 +101,8 @@ func Test_TOR_Stream_Close_Twice_NoPanic(t *testing.T) {
 	err = client.Peer.CloseStream(circID, streamID)
 	require.NoError(t, err)
 
-	exitTable := exit.Peer.GetCircuitStreams(circID)
-	require.NotContains(t, exitTable.Streams, streamID)
+	contains := exit.Peer.ContainsStream(circID, streamID)
+	require.False(t, contains)
 }
 
 // Multiple streams on the same circuit should work
@@ -118,12 +118,11 @@ func Test_TOR_Multiple_Streams_On_Same_Circuit(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 
 	// Both streams must exist
-	require.NotNil(t, client.Peer.GetStream(circID, stream1))
-	require.NotNil(t, client.Peer.GetStream(circID, stream2))
+	require.True(t, client.Peer.ContainsStream(circID, stream1))
+	require.True(t, client.Peer.ContainsStream(circID, stream2))
 
-	exitTable := exit.Peer.GetCircuitStreams(circID)
-	require.Contains(t, exitTable.Streams, stream1)
-	require.Contains(t, exitTable.Streams, stream2)
+	require.False(t, exit.Peer.ContainsStream(circID, stream1))
+	require.False(t, exit.Peer.ContainsStream(circID, stream2))
 }
 
 // If exit node fails to create socket, stream should immediately close
@@ -143,8 +142,7 @@ func Test_TOR_Stream_Open_Fails_When_Exit_Cannot_Open_Socket(t *testing.T) {
 	time.Sleep(150 * time.Millisecond)
 
 	// Exit should have no streams
-	exitTable := exit.Peer.GetCircuitStreams(circID)
-	require.Empty(t, exitTable.Streams)
+	require.False(t, exit.Peer.HasStreams(circID))
 }
 
 // Fake transport that always fails CreateSocket
