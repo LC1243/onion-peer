@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
+	"sync"
 	"time"
 )
 
@@ -15,12 +16,23 @@ type Circuit struct {
 	OutCircID uint16
 	NextHop   string
 	State     string // "pending", "established"
+
+	//Flow control
+	PackageWindow int // Number of cells that can be sent
+	DeliverWindow int // Number of cells that can be received
+	WindowCond    *sync.Cond
 }
 
 type circuitKey struct {
 	PrevHop  string
 	InCircID uint16
 }
+
+const (
+	// Flow control constants
+	DefaultWindowSize = 1000 // Unit is cells
+	WindowIncrement   = 100
+)
 
 // ClientCircuitState represents the state of a client-initiated circuit
 type ClientCircuitState int
@@ -40,6 +52,11 @@ type ClientCircuit struct {
 	State     ClientCircuitState // Current state machine state
 	ReadyChan chan struct{}      // Closed when circuit is ready
 	Error     error              // Set if circuit creation fails
+
+	//Flow control
+	PackageWindow int // Number of cells that can be sent
+	DeliverWindow int // Number of cells that can be received
+	WindowCond    *sync.Cond
 }
 
 // -----------------------------------------------------------------------------
@@ -58,10 +75,13 @@ func (n *node) HandleCreate(cell Cell, src string) error {
 
 	// Create new circuit
 	circ := &Circuit{
-		InCircID: cell.CircID,
-		PrevHop:  src,
-		State:    "established",
+		InCircID:      cell.CircID,
+		PrevHop:       src,
+		State:         "established",
+		PackageWindow: DefaultWindowSize,
+		DeliverWindow: DefaultWindowSize,
 	}
+	circ.WindowCond = sync.NewCond(&n.circuitsMu)
 	n.circuits[key] = circ
 
 	n.log.Info().Str("src", src).Uint16("circID", cell.CircID).Msg("Handling Create cell")
@@ -191,9 +211,22 @@ func (n *node) HandleRelayAsOP(cell Cell, src string, cc *ClientCircuit) error {
 	switch relayCell.Command {
 	case RelayExtended:
 		return n.HandleRelayExtendedAsOP(relayCell)
+	case RelaySendme:
+		return n.HandleRelaySendmeAsOP(relayCell, cc)
 	default:
 		return fmt.Errorf("unexpected relay command %d for client circuit", relayCell.Command)
 	}
+}
+
+// HandleRelaySendmeAsOP handles a RelaySendme command when acting as OP
+func (n *node) HandleRelaySendmeAsOP(relayCell RelayCell, cc *ClientCircuit) error {
+	n.clientCircuitsMu.Lock()
+	defer n.clientCircuitsMu.Unlock()
+
+	cc.PackageWindow += WindowIncrement
+	cc.WindowCond.Broadcast()
+	n.log.Info().Uint16("circID", cc.CircID).Int("newWindow", cc.PackageWindow).Msg("Received SENDME (OP), window updated")
+	return nil
 }
 
 // HandleRelayForwarding handles a relay cell when acting as a relay
@@ -267,6 +300,15 @@ func (n *node) HandleForwardRelay(cell Cell, circ *Circuit) error {
 	}
 
 	// We are an intermediate node, forward the decrypted data to NextHop
+
+	// Flow Control: Check and decrement PackageWindow
+	n.circuitsMu.Lock()
+	for circ.PackageWindow <= 0 {
+		circ.WindowCond.Wait()
+	}
+	circ.PackageWindow--
+	n.circuitsMu.Unlock()
+
 	// Recompute digest for the decrypted data
 	h := sha256.New()
 	h.Write(cryptoStates[0].ForwardDigest)
@@ -397,11 +439,14 @@ func (n *node) BuildCircuit(hops [3]string, timeout time.Duration) (uint16, erro
 
 	// Create the client circuit state
 	cc := &ClientCircuit{
-		CircID:    circID,
-		Hops:      hops,
-		State:     CircuitStateCreating,
-		ReadyChan: make(chan struct{}),
+		CircID:        circID,
+		Hops:          hops,
+		State:         CircuitStateCreating,
+		ReadyChan:     make(chan struct{}),
+		PackageWindow: DefaultWindowSize,
+		DeliverWindow: DefaultWindowSize,
 	}
+	cc.WindowCond = sync.NewCond(&n.clientCircuitsMu)
 
 	n.clientCircuitsMu.Lock()
 	n.clientCircuits[circID] = cc
@@ -599,6 +644,13 @@ func (n *node) HandleRelayExtendedAsOP(relayCell RelayCell) error {
 
 // SendExtendToHop sends a RelayExtend cell to extend the circuit to the next hop
 func (n *node) SendExtendToHop(cc *ClientCircuit, nextHop string) error {
+	// Flow Control: Check and decrement PackageWindow
+	// NOTE: Caller (HandleCreatedAsOP or HandleRelayExtendedAsOP) already holds n.clientCircuitsMu
+	for cc.PackageWindow <= 0 {
+		cc.WindowCond.Wait()
+	}
+	cc.PackageWindow--
+
 	// Get the public onion key for the next hop
 	nextHopPublicKey, err := n.GetPeerPublicOnionKey(nextHop)
 	if err != nil {
@@ -806,4 +858,21 @@ func (n *node) GetClientCircuitsNbr() int {
 	n.clientCircuitsMu.RLock()
 	defer n.clientCircuitsMu.RUnlock()
 	return len(n.clientCircuits)
+}
+
+// HandleRelaySendme handles a RelaySendme command
+func (n *node) HandleRelaySendme(cell RelayCell, circ *Circuit) error {
+	n.circuitsMu.Lock()
+	defer n.circuitsMu.Unlock()
+
+	// Increase the PackageWindow
+	circ.PackageWindow += WindowIncrement
+	circ.WindowCond.Broadcast()
+	n.log.Info().
+		Str("peer", circ.PrevHop).
+		Uint16("circID", circ.InCircID).
+		Int("newPackageWindow", circ.PackageWindow).
+		Msg("Processed RelaySendme, increased PackageWindow")
+
+	return nil
 }
