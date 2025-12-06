@@ -47,6 +47,11 @@ type CircuitStreams struct {
 
 var udpFac transport.Factory = udp.NewUDP
 
+// SetUDPFactory allows tests to override the UDP factory and emulate a SOCK creation failure when UDP is failing
+func SetUDPFactory(factory transport.Factory) {
+	udpFac = factory
+}
+
 type circuitKey struct {
 	PrevHop  string
 	InCircID uint16
