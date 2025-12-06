@@ -258,9 +258,10 @@ func (n *node) HandleRelayForwarding(cell Cell, src string) error {
 	}
 
 	// Determine direction: is this coming from PrevHop or NextHop?
-	if src == circ.PrevHop {
+	switch src {
+	case circ.PrevHop:
 		return n.HandleForwardRelay(cell, circ)
-	} else if src == circ.NextHop {
+	case circ.NextHop:
 		return n.HandleBackwardRelay(cell, circ)
 	}
 
