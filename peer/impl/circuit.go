@@ -337,9 +337,71 @@ func (n *node) HandleForwardRelay(cell Cell, circ *Circuit) error {
 
 // HandleBackwardRelay handles a relay cell going backward (NextHop -> PrevHop)
 func (n *node) HandleBackwardRelay(cell Cell, circ *Circuit) error {
-	// Forward to PrevHop with the InCircID
-	cell.CircID = circ.InCircID
-	return n.SendCell(circ.PrevHop, cell)
+	n.log.Info().
+		Uint16("circID", circ.InCircID).
+		Str("prevHop", circ.PrevHop).
+		Msg("Encrypting and forwarding relay cell to previous hop")
+
+	// Decode the relay cell to get the payload
+	relayCell, err := n.DecodeRelayCell(cell)
+	if err != nil {
+		n.log.Error().
+			Err(err).
+			Uint16("circID", circ.InCircID).
+			Msg("Failed to decode relay cell in backward direction")
+		return err
+	}
+
+	// Get crypto state for this circuit
+	cryptoStates := n.circuitCryptoStates[circ.InCircID]
+	if len(cryptoStates) == 0 {
+		n.log.Error().
+			Uint16("circID", circ.InCircID).
+			Msg("No crypto state found for backward relay")
+		return fmt.Errorf("no crypto state found for circuit %d", circ.InCircID)
+	}
+
+	// Encrypt one layer using our crypto state (adding a layer of encryption)
+	encryptedData, digest, err := EncryptRelayPayload(
+		cryptoStates[0],
+		DirectionBackward,
+		relayCell.Data,
+	)
+	if err != nil {
+		n.log.Error().
+			Err(err).
+			Uint16("circID", circ.InCircID).
+			Msg("Failed to encrypt relay cell data in backward direction")
+		return fmt.Errorf("failed to encrypt relay cell data: %w", err)
+	}
+
+	n.log.Info().
+		Uint16("circID", circ.InCircID).
+		Uint16("streamID", relayCell.StreamID).
+		Int("command", int(relayCell.Command)).
+		Msg("Encrypted relay cell, forwarding to previous hop")
+
+	// Build the encrypted relay cell
+	encryptedRelayCell := RelayCell{
+		CircID:   circ.InCircID,
+		StreamID: relayCell.StreamID,
+		Command:  relayCell.Command,
+		Digest:   digest,
+		Length:   uint16(len(encryptedData)),
+		Data:     encryptedData,
+	}
+
+	// Encode and send to previous hop
+	cellToSend, err := n.EncodeRelayCell(encryptedRelayCell)
+	if err != nil {
+		n.log.Error().
+			Err(err).
+			Uint16("circID", circ.InCircID).
+			Msg("Failed to encode encrypted relay cell")
+		return err
+	}
+
+	return n.SendCell(circ.PrevHop, cellToSend)
 }
 
 // HandleRelayBegin opens a stream on a circuit (as an Exit node)
