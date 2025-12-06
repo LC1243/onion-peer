@@ -509,8 +509,24 @@ func (n *node) HandleRelayEnd(relay RelayCell, circ *Circuit) error {
 
 	// Peer asked to close
 	if stream.State == StreamOpen {
-		stream.State = StreamHalfClosedRemote
-		return n.SendRelayEnd(circ, relay.StreamID)
+		n.log.Info().
+			Uint16("circID", circ.InCircID).
+			Uint16("streamID", relay.StreamID).
+			Msg("Stream was Open, sending RelayEnd and closing immediately (relay circuit)")
+
+		// Send acknowledgment
+		err := n.SendRelayEnd(circ, relay.StreamID)
+
+		// Close the stream immediately since we're the endpoint
+		stream.State = StreamFullyClosed
+		n.DeleteStream(circ.InCircID, stream)
+
+		n.log.Info().
+			Uint16("circID", circ.InCircID).
+			Uint16("streamID", relay.StreamID).
+			Msg("Stream fully closed and deleted (relay circuit)")
+
+		return err
 	}
 
 	// Peer’s acknowledgment
