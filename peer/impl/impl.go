@@ -48,6 +48,7 @@ func NewPeer(conf peer.Configuration) peer.Peer {
 	n.ackWaiter = make(map[string]*ackWait)
 	n.circuits = make(map[circuitKey]*Circuit)
 	n.clientCircuits = make(map[uint16]*ClientCircuit)
+	n.streamTables = make(map[uint16]*CircuitStreams)
 
 	// Initialize crypto state
 	n.peerOnionKeys = make(map[string]*rsa.PublicKey)
@@ -125,6 +126,10 @@ type node struct {
 	clientCircuitsMu sync.RWMutex
 	clientCircuits   map[uint16]*ClientCircuit
 
+	// streamTables[circID] = CircuitStreams
+	streamsMu    sync.RWMutex
+	streamTables map[uint16]*CircuitStreams
+
 	// Cryptography for Tor-like onion routing
 	onionKey      *OnionKeyPair             // This node's long-term onion keypair
 	peerOnionKeys map[string]*rsa.PublicKey // Cached onion public keys for peers
@@ -135,6 +140,9 @@ type node struct {
 	// Crypto states per circuit ID. Each Circuit ID has multiple Crypto States, one per hop
 	circuitCryptoStates map[uint16][]*CircuitCryptoState
 	cryptoStatesMu      sync.Mutex // Protects circuitCryptoStates
+
+	circuitIDMu sync.Mutex // Protects circuit ID generation
+	circuitIDs  []uint16   // Allocated circuit IDs
 }
 
 // Start implements peer.Service
@@ -379,4 +387,58 @@ func (n *node) GetPeerPublicOnionKey(peerAddr string) (*rsa.PublicKey, error) {
 		return nil, fmt.Errorf("onion public key for peer %s not found", peerAddr)
 	}
 	return pubKey, nil
+}
+
+// AddStream adds a stream to the circuit's stream table'
+func (n *node) AddStream(circID uint16, stream *Stream) {
+	table := n.GetCircuitStreams(circID)
+
+	n.streamsMu.Lock()
+	table.Streams[stream.ID] = stream
+	n.streamsMu.Unlock()
+}
+
+// DeleteStream deletes a stream to the circuit's stream table
+func (n *node) DeleteStream(circID uint16, stream *Stream) {
+	table := n.GetCircuitStreams(circID)
+
+	n.streamsMu.Lock()
+	delete(table.Streams, stream.ID)
+	n.streamsMu.Unlock()
+}
+
+// GetStream returns a stream from the circuit's stream table
+func (n *node) GetStream(circID uint16, streamID uint16) *Stream {
+	n.streamsMu.RLock()
+	table, ok := n.streamTables[circID]
+	if !ok {
+		n.streamsMu.RUnlock()
+		return nil
+	}
+	stream := table.Streams[streamID]
+	n.streamsMu.RUnlock()
+	return stream
+}
+
+// GetCircuitStreams returns the streams table for a given circuit ID
+func (n *node) GetCircuitStreams(circID uint16) *CircuitStreams {
+	n.streamsMu.Lock()
+	defer n.streamsMu.Unlock()
+
+	// If no table exists yet, create it
+	table, ok := n.streamTables[circID]
+	if !ok {
+		table = &CircuitStreams{
+			Streams: make(map[uint16]*Stream),
+		}
+		n.streamTables[circID] = table
+	}
+	return table
+}
+
+// CleanupStreams removes the streams table when a circuit is destroyed
+func (n *node) CleanupStreams(circID uint16) {
+	n.streamsMu.Lock()
+	delete(n.streamTables, circID)
+	n.streamsMu.Unlock()
 }

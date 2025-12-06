@@ -2,9 +2,9 @@ name: Tor Tests
 
 on:
   push:
-    branches: [main, circuit-creation]
+    branches: [main, circuit-creation, feat-streams]
   pull_request:
-    branches: [main]
+    branches: [main, feat-streams]
 
 jobs:
   test_tor:
