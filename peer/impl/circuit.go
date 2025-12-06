@@ -309,6 +309,11 @@ func (n *node) HandleForwardRelay(cell Cell, circ *Circuit) error {
 		}
 	}
 
+	n.log.Info().
+		Uint16("circID", circ.InCircID).
+		Str("nextHop", circ.NextHop).
+		Msg("Forwarding Decrypted relay cell to next hop")
+
 	// We are an intermediate node, forward the decrypted data to NextHop
 	// Recompute digest for the decrypted data
 	h := sha256.New()
@@ -343,8 +348,19 @@ func (n *node) HandleRelayBegin(relay RelayCell, circ *Circuit) error {
 	transportSocket := udpFac()
 	socket, err := transportSocket.CreateSocket(":0")
 	if err != nil {
+		n.log.Error().
+			Err(err).
+			Uint16("circID", circ.InCircID).
+			Uint16("streamID", relay.StreamID).
+			Msg("Server failed to open socket. Sending RelayEnd") // TODO: Should send Relay Truncate
 		return n.SendRelayEnd(circ, relay.StreamID)
 	}
+
+	n.log.Info().
+		Uint16("circID", circ.InCircID).
+		Uint16("streamID", relay.StreamID).
+		Str("targetAddr", string(relay.Data)).
+		Msg("Handling RelayBegin - opening stream as Exit node")
 
 	stream := &Stream{
 		ID:         relay.StreamID,
@@ -355,13 +371,28 @@ func (n *node) HandleRelayBegin(relay RelayCell, circ *Circuit) error {
 	}
 
 	n.AddStream(circ.InCircID, stream)
+	n.log.Info().
+		Uint16("circID", circ.InCircID).
+		Uint16("streamID", relay.StreamID).
+		Msg("Added stream to circuit")
+
 	// Respond with RELAY_CONNECTED
 	stream.State = StreamOpen
+	n.log.Info().
+		Uint16("circID", circ.InCircID).
+		Uint16("streamID", relay.StreamID).
+		Msg("Stream state set to Open, sending RelayConnected")
 	return n.SendRelayConnected(circ, relay.StreamID)
 }
 
 // SendRelayConnected sends RELAY_CONNECTED after receiving RELAY_BEGIN
 func (n *node) SendRelayConnected(circ *Circuit, streamID uint16) error {
+	n.log.Info().
+		Uint16("circID", circ.InCircID).
+		Uint16("streamID", streamID).
+		Str("prevHop", circ.PrevHop).
+		Msg("Sending RelayConnected to previous hop")
+
 	exitID := len(n.circuitCryptoStates[circ.InCircID]) - 1
 	crypto := n.circuitCryptoStates[circ.InCircID][exitID]
 	encrypted, digest, err := EncryptRelayPayload(
@@ -371,6 +402,11 @@ func (n *node) SendRelayConnected(circ *Circuit, streamID uint16) error {
 	)
 
 	if err != nil {
+		n.log.Error().
+			Err(err).
+			Uint16("circID", circ.InCircID).
+			Uint16("streamID", streamID).
+			Msg("Failed to encrypt RelayConnected payload")
 		return err
 	}
 
@@ -384,6 +420,10 @@ func (n *node) SendRelayConnected(circ *Circuit, streamID uint16) error {
 	}
 
 	msg, _ := n.EncodeRelayCell(cell)
+	n.log.Info().
+		Uint16("circID", circ.InCircID).
+		Uint16("streamID", streamID).
+		Msg("RelayConnected sent successfully")
 	return n.SendCell(circ.PrevHop, msg)
 }
 
@@ -429,6 +469,12 @@ func (n *node) HandleRelayEnd(relay RelayCell, circ *Circuit) error {
 
 // SendRelayEnd sends RELAY_END for closing a stream on a circuit
 func (n *node) SendRelayEnd(circ *Circuit, streamID uint16) error {
+	n.log.Info().
+		Uint16("circID", circ.InCircID).
+		Uint16("streamID", streamID).
+		Str("prevHop", circ.PrevHop).
+		Msg("Sending RelayEnd to previous hop")
+
 	exitIdx := len(n.circuitCryptoStates[circ.InCircID]) - 1
 	crypto := n.circuitCryptoStates[circ.InCircID][exitIdx]
 
@@ -439,6 +485,11 @@ func (n *node) SendRelayEnd(circ *Circuit, streamID uint16) error {
 	)
 
 	if err != nil {
+		n.log.Error().
+			Err(err).
+			Uint16("circID", circ.InCircID).
+			Uint16("streamID", streamID).
+			Msg("Failed to encrypt RelayEnd payload")
 		return err
 	}
 
@@ -452,6 +503,10 @@ func (n *node) SendRelayEnd(circ *Circuit, streamID uint16) error {
 	}
 
 	realCell, _ := n.EncodeRelayCell(relay)
+	n.log.Info().
+		Uint16("circID", circ.InCircID).
+		Uint16("streamID", streamID).
+		Msg("RelayEnd sent successfully")
 	return n.SendCell(circ.PrevHop, realCell)
 }
 
@@ -760,36 +815,82 @@ func (n *node) HandleRelayExtendedAsOP(relayCell RelayCell) error {
 
 // HandleRelayConnectedAsOP sets the stream as open
 func (n *node) HandleRelayConnectedAsOP(relay RelayCell, cc *ClientCircuit) error {
+	n.log.Info().
+		Uint16("circID", cc.CircID).
+		Uint16("streamID", relay.StreamID).
+		Msg("Handling RelayConnected as OP")
+
 	stream := n.GetStream(cc.CircID, relay.StreamID)
 	if stream == nil {
+		n.log.Error().
+			Uint16("circID", cc.CircID).
+			Uint16("streamID", relay.StreamID).
+			Msg("Received RelayConnected for unknown stream")
 		return fmt.Errorf("unknown stream %d", relay.StreamID)
 	}
 
+	n.log.Info().
+		Uint16("circID", cc.CircID).
+		Uint16("streamID", relay.StreamID).
+		Str("previousState", streamStateToString(stream.State)).
+		Msg("Stream found, transitioning to Open")
+
 	// receive connected reply, we can now set the stream state as open
 	stream.State = StreamOpen
+	n.log.Info().
+		Uint16("circID", cc.CircID).
+		Uint16("streamID", relay.StreamID).
+		Msg("Stream is now Open and ready for use")
 	return nil
 }
 
 // HandleRelayEndAsOP sets the stream as closed
 func (n *node) HandleRelayEndAsOP(relay RelayCell, cc *ClientCircuit) error {
+	n.log.Info().
+		Uint16("circID", cc.CircID).
+		Uint16("streamID", relay.StreamID).
+		Msg("Handling RelayEnd as OP")
+
 	streams := n.GetCircuitStreams(cc.CircID)
 	stream := streams.Streams[relay.StreamID]
 
 	if stream == nil {
+		n.log.Error().
+			Uint16("circID", cc.CircID).
+			Uint16("streamID", relay.StreamID).
+			Msg("Received RelayEnd for unknown stream")
 		return fmt.Errorf("unknown stream %d", relay.StreamID)
 	}
 
+	n.log.Info().
+		Uint16("circID", cc.CircID).
+		Uint16("streamID", relay.StreamID).
+		Str("currentState", streamStateToString(stream.State)).
+		Msg("Stream found, processing RelayEnd")
+
 	if stream.State == StreamOpen {
+		n.log.Info().
+			Uint16("circID", cc.CircID).
+			Uint16("streamID", relay.StreamID).
+			Msg("Stream was Open, transitioning to HalfClosedRemote and sending RelayEnd")
 		stream.State = StreamHalfClosedRemote
 		return n.SendRelayEndAsClient(cc.CircID, stream.ID)
 	}
 
 	if stream.State == StreamHalfClosedLocal {
+		n.log.Info().
+			Uint16("circID", cc.CircID).
+			Uint16("streamID", relay.StreamID).
+			Msg("Stream was HalfClosedLocal, transitioning to FullyClosed and closing socket")
 		stream.State = StreamFullyClosed
 		if stream.Sock != nil {
 			stream.Sock.Close()
 		}
 		n.DeleteStream(cc.CircID, stream)
+		n.log.Info().
+			Uint16("circID", cc.CircID).
+			Uint16("streamID", relay.StreamID).
+			Msg("Stream fully closed and deleted")
 	}
 
 	return nil
@@ -797,10 +898,20 @@ func (n *node) HandleRelayEndAsOP(relay RelayCell, cc *ClientCircuit) error {
 
 // SendRelayEndAsClient sends a RelayEnd cell as a client
 func (n *node) SendRelayEndAsClient(circID, streamID uint16) error {
+	n.log.Info().
+		Uint16("circID", circID).
+		Uint16("streamID", streamID).
+		Msg("Sending RelayEnd as client")
+
 	cryptoStates := n.circuitCryptoStates[circID]
 	encrypted, digest, err := EncryptRelayCellThroughCircuit(cryptoStates, []byte{})
 
 	if err != nil {
+		n.log.Error().
+			Err(err).
+			Uint16("circID", circID).
+			Uint16("streamID", streamID).
+			Msg("Failed to encrypt RelayEnd payload")
 		return err
 	}
 
@@ -815,6 +926,11 @@ func (n *node) SendRelayEndAsClient(circID, streamID uint16) error {
 
 	cell, _ := n.EncodeRelayCell(relayCell)
 	cc := n.clientCircuits[circID]
+	n.log.Info().
+		Uint16("circID", circID).
+		Uint16("streamID", streamID).
+		Str("guard", cc.Hops[0]).
+		Msg("Sending RelayEnd to guard")
 	return n.SendCell(cc.Hops[0], cell)
 }
 
@@ -1027,6 +1143,10 @@ func (n *node) GenerateStreamID(circID uint16) uint16 {
 		id := uint16(rand.Intn(65535) + 1)
 		_, exists := table.Streams[id]
 		if !exists {
+			n.log.Debug().
+				Uint16("circID", circID).
+				Uint16("streamID", id).
+				Msg("Generated new stream ID")
 			return id
 		}
 	}
@@ -1035,23 +1155,44 @@ func (n *node) GenerateStreamID(circID uint16) uint16 {
 // OpenStream implements Tor.OpenStream
 // opens a new stream over an existing client circuit (OP side).
 func (n *node) OpenStream(circID uint16, targetAddr string) (uint16, error) {
+	n.log.Info().
+		Uint16("circID", circID).
+		Str("targetAddr", targetAddr).
+		Msg("Opening new stream over client circuit")
+
 	// Look up the client circuit
 	n.clientCircuitsMu.RLock()
 	cc, exists := n.clientCircuits[circID]
 	n.clientCircuitsMu.RUnlock()
 	if !exists {
+		n.log.Error().
+			Uint16("circID", circID).
+			Msg("Cannot open stream: unknown client circuit")
 		return 0, fmt.Errorf("unknown client circuit %d", circID)
 	}
 	if cc.State != CircuitStateReady {
+		n.log.Error().
+			Uint16("circID", circID).
+			Int("currentState", int(cc.State)).
+			Msg("Cannot open stream: circuit not ready")
 		return 0, fmt.Errorf("circuit %d not ready (current state is %d)", circID, cc.State)
 	}
 
 	cryptoStates := n.circuitCryptoStates[circID]
 	if len(cryptoStates) == 0 {
+		n.log.Error().
+			Uint16("circID", circID).
+			Msg("Cannot open stream: no crypto states found for circuit")
 		return 0, fmt.Errorf("no crypto states found for circuit %d", circID)
 	}
 
 	streamID := n.GenerateStreamID(circID)
+
+	n.log.Info().
+		Uint16("circID", circID).
+		Uint16("streamID", streamID).
+		Str("targetAddr", targetAddr).
+		Msg("Generated stream ID and creating stream object")
 
 	stream := &Stream{
 		ID:         streamID,
@@ -1060,11 +1201,20 @@ func (n *node) OpenStream(circID uint16, targetAddr string) (uint16, error) {
 		TargetAddr: targetAddr,
 	}
 	n.AddStream(circID, stream)
+	n.log.Info().
+		Uint16("circID", circID).
+		Uint16("streamID", streamID).
+		Msg("Stream added to circuit, encrypting RELAY_BEGIN payload")
 
 	plainPayload := []byte(targetAddr)
 
 	encryptedPayload, digest, err := EncryptRelayCellThroughCircuit(cryptoStates, plainPayload)
 	if err != nil {
+		n.log.Error().
+			Err(err).
+			Uint16("circID", circID).
+			Uint16("streamID", streamID).
+			Msg("Failed to encrypt RELAY_BEGIN payload")
 		return 0, fmt.Errorf("failed to encrypt RELAY_BEGIN payload: %w", err)
 	}
 
@@ -1080,13 +1230,35 @@ func (n *node) OpenStream(circID uint16, targetAddr string) (uint16, error) {
 
 	cell, err := n.EncodeRelayCell(relayCell)
 	if err != nil {
+		n.log.Error().
+			Err(err).
+			Uint16("circID", circID).
+			Uint16("streamID", streamID).
+			Msg("Failed to encode RELAY_BEGIN cell")
 		return 0, fmt.Errorf("failed to encode RELAY_BEGIN cell: %w", err)
 	}
 
+	n.log.Info().
+		Uint16("circID", circID).
+		Uint16("streamID", streamID).
+		Str("guard", cc.Hops[0]).
+		Msg("Sending RELAY_BEGIN to guard")
+
 	err = n.SendCell(cc.Hops[0], cell)
 	if err != nil {
+		n.log.Error().
+			Err(err).
+			Uint16("circID", circID).
+			Uint16("streamID", streamID).
+			Str("guard", cc.Hops[0]).
+			Msg("Failed to send RELAY_BEGIN to guard")
 		return 0, fmt.Errorf("failed to send RELAY_BEGIN to guard: %w", err)
 	}
+
+	n.log.Info().
+		Uint16("circID", circID).
+		Uint16("streamID", streamID).
+		Msg("RELAY_BEGIN sent successfully, stream waiting for connected")
 
 	return streamID, nil
 }
@@ -1094,27 +1266,60 @@ func (n *node) OpenStream(circID uint16, targetAddr string) (uint16, error) {
 // CloseStream implements Tor.CloseStream
 // closes a stream from the OP side by sending RELAY_END.
 func (n *node) CloseStream(circID, streamID uint16) error {
+	n.log.Info().
+		Uint16("circID", circID).
+		Uint16("streamID", streamID).
+		Msg("Closing stream from OP side")
+
 	// Look up the client circuit
 	n.clientCircuitsMu.RLock()
 	cc, exists := n.clientCircuits[circID]
 	n.clientCircuitsMu.RUnlock()
 	if !exists {
+		n.log.Error().
+			Uint16("circID", circID).
+			Uint16("streamID", streamID).
+			Msg("Cannot close stream: unknown client circuit")
 		return fmt.Errorf("unknown client circuit %d", circID)
 	}
 
 	stream := n.GetStream(circID, streamID)
 	if stream != nil {
+		n.log.Info().
+			Uint16("circID", circID).
+			Uint16("streamID", streamID).
+			Str("previousState", streamStateToString(stream.State)).
+			Msg("Stream found, transitioning to HalfClosedLocal")
 		stream.State = StreamHalfClosedLocal
+	} else {
+		n.log.Warn().
+			Uint16("circID", circID).
+			Uint16("streamID", streamID).
+			Msg("Stream not found when trying to close")
 	}
 
 	cryptoStates := n.circuitCryptoStates[circID]
 	if len(cryptoStates) == 0 {
+		n.log.Error().
+			Uint16("circID", circID).
+			Uint16("streamID", streamID).
+			Msg("Cannot close stream: no crypto states found for circuit")
 		return fmt.Errorf("no crypto states found for circuit %d", circID)
 	}
+
+	n.log.Info().
+		Uint16("circID", circID).
+		Uint16("streamID", streamID).
+		Msg("Encrypting RELAY_END payload")
 
 	// empty payload for now
 	encryptedPayload, digest, err := EncryptRelayCellThroughCircuit(cryptoStates, []byte{})
 	if err != nil {
+		n.log.Error().
+			Err(err).
+			Uint16("circID", circID).
+			Uint16("streamID", streamID).
+			Msg("Failed to encrypt RELAY_END payload")
 		return fmt.Errorf("failed to encrypt RELAY_END payload: %w", err)
 	}
 
@@ -1129,10 +1334,34 @@ func (n *node) CloseStream(circID, streamID uint16) error {
 
 	cell, err := n.EncodeRelayCell(relayCell)
 	if err != nil {
+		n.log.Error().
+			Err(err).
+			Uint16("circID", circID).
+			Uint16("streamID", streamID).
+			Msg("Failed to encode RELAY_END cell")
 		return fmt.Errorf("failed to encode RELAY_END cell: %w", err)
 	}
 
-	return n.SendCell(cc.Hops[0], cell)
+	n.log.Info().
+		Uint16("circID", circID).
+		Uint16("streamID", streamID).
+		Str("guard", cc.Hops[0]).
+		Msg("Sending RELAY_END to guard")
+
+	err = n.SendCell(cc.Hops[0], cell)
+	if err != nil {
+		n.log.Error().
+			Err(err).
+			Uint16("circID", circID).
+			Uint16("streamID", streamID).
+			Msg("Failed to send RELAY_END")
+	} else {
+		n.log.Info().
+			Uint16("circID", circID).
+			Uint16("streamID", streamID).
+			Msg("RELAY_END sent successfully")
+	}
+	return err
 }
 
 // GetCircuitsNbr returns the number of relay circuits (for testing)
@@ -1156,9 +1385,18 @@ func (n *node) HasStream(circID, streamID uint16) bool {
 
 	table, ok := n.streamTables[circID]
 	if !ok {
+		n.log.Debug().
+			Uint16("circID", circID).
+			Uint16("streamID", streamID).
+			Msg("HasStream: no stream table for circuit")
 		return false
 	}
 	_, exists := table.Streams[streamID]
+	n.log.Debug().
+		Uint16("circID", circID).
+		Uint16("streamID", streamID).
+		Bool("exists", exists).
+		Msg("HasStream check result")
 	return exists
 }
 
@@ -1169,9 +1407,18 @@ func (n *node) ContainsStream(circID, streamID uint16) bool {
 
 	table, ok := n.streamTables[circID]
 	if !ok {
+		n.log.Debug().
+			Uint16("circID", circID).
+			Uint16("streamID", streamID).
+			Msg("ContainsStream: no stream table for circuit")
 		return false
 	}
 	_, exists := table.Streams[streamID]
+	n.log.Debug().
+		Uint16("circID", circID).
+		Uint16("streamID", streamID).
+		Bool("exists", exists).
+		Msg("ContainsStream check result")
 	return exists
 }
 
@@ -1182,8 +1429,37 @@ func (n *node) HasStreams(circID uint16) bool {
 
 	table, ok := n.streamTables[circID]
 	if !ok {
+		n.log.Debug().
+			Uint16("circID", circID).
+			Msg("HasStreams: no stream table for circuit")
 		return false
 	}
 
-	return len(table.Streams) > 0
+	hasStreams := len(table.Streams) > 0
+	n.log.Debug().
+		Uint16("circID", circID).
+		Int("streamCount", len(table.Streams)).
+		Bool("hasStreams", hasStreams).
+		Msg("HasStreams check result")
+	return hasStreams
+}
+
+// streamStateToString converts StreamState to a human-readable string
+func streamStateToString(state StreamState) string {
+	switch state {
+	case StreamInit:
+		return "Init"
+	case StreamWaitingForConnected:
+		return "WaitingForConnected"
+	case StreamOpen:
+		return "Open"
+	case StreamHalfClosedLocal:
+		return "HalfClosedLocal"
+	case StreamHalfClosedRemote:
+		return "HalfClosedRemote"
+	case StreamFullyClosed:
+		return "FullyClosed"
+	default:
+		return fmt.Sprintf("Unknown(%d)", state)
+	}
 }
