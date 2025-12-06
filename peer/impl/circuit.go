@@ -930,6 +930,26 @@ func (n *node) HandleRelayEndAsOP(relay RelayCell, cc *ClientCircuit) error {
 		Str("currentState", streamStateToString(stream.State)).
 		Msg("Stream found, processing RelayEnd")
 
+	// TODO: This should've been a relay teardown message instead of a relay end message
+	// Relay teardown is sent if the server failed to open a TCP connection to the target
+	// This creates a single-handshake instead of a two-handshake close
+	// For now, we handle it as a normal RelayEnd
+
+	// Peer asked to close the stream
+	if stream.State == StreamWaitingForConnected {
+		n.log.Info().
+			Uint16("circID", cc.CircID).
+			Uint16("streamID", relay.StreamID).
+			Msg("Stream was WaitingForConnected, transitioning to FullyClosed and deleting stream")
+		stream.State = StreamFullyClosed
+		n.DeleteStream(cc.CircID, stream)
+		n.log.Info().
+			Uint16("circID", cc.CircID).
+			Uint16("streamID", relay.StreamID).
+			Msg("Stream fully closed and deleted")
+		return nil
+	}
+
 	if stream.State == StreamOpen {
 		n.log.Info().
 			Uint16("circID", cc.CircID).
