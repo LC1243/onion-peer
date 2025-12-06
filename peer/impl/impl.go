@@ -140,6 +140,9 @@ type node struct {
 	// Crypto states per circuit ID. Each Circuit ID has multiple Crypto States, one per hop
 	circuitCryptoStates map[uint16][]*CircuitCryptoState
 	cryptoStatesMu      sync.Mutex // Protects circuitCryptoStates
+
+	circuitIDMu sync.Mutex // Protects circuit ID generation
+	circuitIDs  []uint16   // Allocated circuit IDs
 }
 
 // Start implements peer.Service

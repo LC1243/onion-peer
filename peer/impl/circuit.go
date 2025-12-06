@@ -99,6 +99,9 @@ func (n *node) HandleCreate(cell Cell, src string) error {
 	}
 	n.circuits[key] = circ
 
+	// Track this circuit ID
+	n.addCircuitID(cell.CircID)
+
 	n.log.Info().Str("src", src).Uint16("circID", cell.CircID).Msg("Handling Create cell")
 
 	// Perform handshake and derive keys using CompleteHandshakeAsResponder
@@ -572,7 +575,7 @@ func (n *node) HandleRelayExtend(relayCell RelayCell, circ *Circuit) error {
 
 	var newID uint16
 	for {
-		newID = uint16(rand.Intn(65535) + 1)
+		newID = uint16(rand.Intn(65535) + 1) // Generate new circuit ID
 		collision := false
 		for _, c := range n.circuits {
 			if c.NextHop == target && c.OutCircID == newID {
@@ -588,6 +591,9 @@ func (n *node) HandleRelayExtend(relayCell RelayCell, circ *Circuit) error {
 	circ.NextHop = target
 	circ.OutCircID = newID
 	circ.State = "extending"
+
+	// Track the new outgoing circuit ID
+	n.addCircuitID(newID)
 
 	n.log.Info().Str("target", target).Uint16("newCircID", newID).Msg("Extending circuit")
 
@@ -653,6 +659,9 @@ func (n *node) BuildCircuit(hops [3]string, timeout time.Duration) (uint16, erro
 	n.clientCircuitsMu.Lock()
 	n.clientCircuits[circID] = cc
 	n.clientCircuitsMu.Unlock()
+
+	// Track this circuit ID
+	n.addCircuitID(circID)
 
 	n.log.Info().
 		Uint16("circID", circID).
@@ -1120,6 +1129,10 @@ func destroyCircuitAsClient(n *node, initiator bool, circID uint16) error {
 
 	n.CleanupClientCircuit(circID)
 	n.CleanupStreams(circID)
+
+	// Remove circuit ID from tracking
+	n.removeCircuitID(circID)
+
 	addr := n.conf.Socket.GetAddress()
 	n.log.Info().Str("peer", addr).Uint16("circID", circID).Msg("Destroyed client")
 	return nil
@@ -1168,6 +1181,12 @@ func destroyCircuitAsRelay(n *node, initiator bool, circID uint16, src string) e
 	n.circuitsMu.Unlock()
 
 	n.CleanupStreams(circ.InCircID)
+
+	// Remove both InCircID and OutCircID from tracking
+	n.removeCircuitID(circ.InCircID)
+	if circ.OutCircID != 0 {
+		n.removeCircuitID(circ.OutCircID)
+	}
 
 	addr := n.conf.Socket.GetAddress()
 	n.log.Info().Str("peer", addr).Uint16("circID", circID).Msg("Destroyed relay")
@@ -1509,8 +1528,8 @@ func (n *node) ContainsStream(circID, streamID uint16) bool {
 	return exists
 }
 
-// HasStreams returns true if the circuit has at least one active stream.
-func (n *node) HasStreams(circID uint16) bool {
+// HasStreams returns the number of streams for a client circuit
+func (n *node) HasStreams(circID uint16) (uint16, error) {
 	n.streamsMu.RLock()
 	defer n.streamsMu.RUnlock()
 
@@ -1519,7 +1538,7 @@ func (n *node) HasStreams(circID uint16) bool {
 		n.log.Debug().
 			Uint16("circID", circID).
 			Msg("HasStreams: no stream table for circuit")
-		return false
+		return 0, fmt.Errorf("no stream table for circuit %d", circID)
 	}
 
 	hasStreams := len(table.Streams) > 0
@@ -1528,7 +1547,7 @@ func (n *node) HasStreams(circID uint16) bool {
 		Int("streamCount", len(table.Streams)).
 		Bool("hasStreams", hasStreams).
 		Msg("HasStreams check result")
-	return hasStreams
+	return uint16(len(table.Streams)), nil
 }
 
 // streamStateToString converts StreamState to a human-readable string
@@ -1549,4 +1568,47 @@ func streamStateToString(state StreamState) string {
 	default:
 		return fmt.Sprintf("Unknown(%d)", state)
 	}
+}
+
+// addCircuitID adds a circuit ID to the tracked list
+func (n *node) addCircuitID(circID uint16) {
+	n.circuitIDMu.Lock()
+	defer n.circuitIDMu.Unlock()
+
+	// Check if already exists
+	for _, id := range n.circuitIDs {
+		if id == circID {
+			return
+		}
+	}
+
+	n.circuitIDs = append(n.circuitIDs, circID)
+	n.log.Debug().Uint16("circID", circID).Msg("Added circuit ID to tracking list")
+}
+
+// removeCircuitID removes a circuit ID from the tracked list
+func (n *node) removeCircuitID(circID uint16) {
+	n.circuitIDMu.Lock()
+	defer n.circuitIDMu.Unlock()
+
+	for i, id := range n.circuitIDs {
+		if id == circID {
+			// Remove by replacing with last element and truncating
+			n.circuitIDs[i] = n.circuitIDs[len(n.circuitIDs)-1]
+			n.circuitIDs = n.circuitIDs[:len(n.circuitIDs)-1]
+			n.log.Debug().Uint16("circID", circID).Msg("Removed circuit ID from tracking list")
+			return
+		}
+	}
+}
+
+// GetCircuitIDs returns a copy of all tracked circuit IDs (for testing)
+func (n *node) GetCircuitIDs() []uint16 {
+	n.circuitIDMu.Lock()
+	defer n.circuitIDMu.Unlock()
+
+	// Return a copy to prevent external modification
+	ids := make([]uint16, len(n.circuitIDs))
+	copy(ids, n.circuitIDs)
+	return ids
 }

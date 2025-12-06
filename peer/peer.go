@@ -48,6 +48,9 @@ type Tor interface {
 
 	// GetClientCircuitsNbr returns the number of active client circuits managed by the peer.
 	GetClientCircuitsNbr() int
+
+	// GetCircuitIDs returns all tracked circuit IDs (for testing)
+	GetCircuitIDs() []uint16
 }
 
 // TorStreams defines the interface for Tor-like streams.
@@ -66,7 +69,7 @@ type TorStreams interface {
 	ContainsStream(circID, streamID uint16) bool
 
 	// HasStreams reports whether a circuit has any stream or is empty
-	HasStreams(circID uint16) bool
+	HasStreams(circID uint16) (uint16, error)
 }
 
 // Factory is the type of function we are using to create new instances of
