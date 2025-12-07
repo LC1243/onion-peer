@@ -869,7 +869,43 @@ func (n *node) HandleRelayExtendedAsOP(relayCell RelayCell) error {
 		return n.SendExtendToHop(cc, cc.Hops[2])
 
 	case CircuitStateExtending2:
-		// Exit responded, circuit is ready!
+		// Exit responded, complete the handshake and circuit is ready!
+
+		n.log.Info().Uint16("circID", circID).Msg("Exit Responded, Finishing handshake for Exit")
+
+		// Decrypt the RELAY_EXTENDED payload through the already established hops
+		cryptoStates := n.circuitCryptoStates[cc.CircID]
+		if len(cryptoStates) < 2 {
+			return fmt.Errorf("insufficient crypto states (%d) for circuit %d", len(cryptoStates), circID)
+		}
+
+		// Decrypt through middle and guard layers to get exit's handshake response
+		relayExtendedPayloadPlainText, _ := DecryptRelayCellAtHop(
+			cryptoStates[1],
+			DirectionBackward,
+			relayCell.Data,
+			relayCell.Digest,
+		)
+
+		relayExtendedPayloadPlainText, _ = DecryptRelayCellAtHop(
+			cryptoStates[0],
+			DirectionBackward,
+			relayExtendedPayloadPlainText,
+			relayCell.Digest,
+		)
+
+		// Complete the handshake as the initiator for the Exit node
+		circuitCryptoState, err := n.FinishHandshakeAsInitiator(
+			n.diffieHellmanHandshakePairs[cc.CircID],
+			relayExtendedPayloadPlainText,
+		)
+		if err != nil {
+			return fmt.Errorf("failed to complete handshake for circuit %d at Exit: %w", circID, err)
+		}
+
+		// Append the exit hop crypto state to the slice
+		n.circuitCryptoStates[cc.CircID] = append(n.circuitCryptoStates[cc.CircID], circuitCryptoState)
+
 		cc.State = CircuitStateReady
 		n.log.Info().Uint16("circID", circID).Msg("Circuit fully established!")
 		close(cc.ReadyChan)
