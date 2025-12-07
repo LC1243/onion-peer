@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
+	"sync"
 	"time"
 
 	"go.dedis.ch/cs438/transport"
@@ -34,6 +35,7 @@ const (
 )
 
 type Stream struct {
+	mu         sync.RWMutex // protects State field
 	ID         uint16
 	CircID     uint16
 	State      StreamState
@@ -443,7 +445,9 @@ func (n *node) HandleRelayBegin(relay RelayCell, circ *Circuit) error {
 		Msg("Added stream to circuit")
 
 	// Respond with RELAY_CONNECTED
+	stream.mu.Lock()
 	stream.State = StreamOpen
+	stream.mu.Unlock()
 	n.log.Info().
 		Uint16("circID", circ.InCircID).
 		Uint16("streamID", relay.StreamID).
@@ -508,7 +512,11 @@ func (n *node) HandleRelayEnd(relay RelayCell, circ *Circuit) error {
 	}
 
 	// Peer asked to close
-	if stream.State == StreamOpen {
+	stream.mu.Lock()
+	currentState := stream.State
+	stream.mu.Unlock()
+
+	if currentState == StreamOpen {
 		n.log.Info().
 			Uint16("circID", circ.InCircID).
 			Uint16("streamID", relay.StreamID).
@@ -518,7 +526,9 @@ func (n *node) HandleRelayEnd(relay RelayCell, circ *Circuit) error {
 		err := n.SendRelayEnd(circ, relay.StreamID)
 
 		// Close the stream immediately since we're the endpoint
+		stream.mu.Lock()
 		stream.State = StreamFullyClosed
+		stream.mu.Unlock()
 		n.DeleteStream(circ.InCircID, stream)
 
 		n.log.Info().
@@ -530,8 +540,10 @@ func (n *node) HandleRelayEnd(relay RelayCell, circ *Circuit) error {
 	}
 
 	// Peer’s acknowledgment
-	if stream.State == StreamHalfClosedLocal {
+	if currentState == StreamHalfClosedLocal {
+		stream.mu.Lock()
 		stream.State = StreamFullyClosed
+		stream.mu.Unlock()
 		err := stream.Sock.Close()
 		if err != nil {
 			return err
@@ -540,8 +552,10 @@ func (n *node) HandleRelayEnd(relay RelayCell, circ *Circuit) error {
 		return nil
 	}
 
-	if stream.State == StreamHalfClosedRemote {
+	if currentState == StreamHalfClosedRemote {
+		stream.mu.Lock()
 		stream.State = StreamFullyClosed
+		stream.mu.Unlock()
 		if stream.Sock != nil {
 			err := stream.Sock.Close()
 			if err != nil {
@@ -885,14 +899,20 @@ func (n *node) HandleRelayConnectedAsOP(relay RelayCell, cc *ClientCircuit) erro
 		return fmt.Errorf("unknown stream %d", relay.StreamID)
 	}
 
+	stream.mu.RLock()
+	prevState := stream.State
+	stream.mu.RUnlock()
+
 	n.log.Info().
 		Uint16("circID", cc.CircID).
 		Uint16("streamID", relay.StreamID).
-		Str("previousState", streamStateToString(stream.State)).
+		Str("previousState", streamStateToString(prevState)).
 		Msg("Stream found, transitioning to Open")
 
 	// receive connected reply, we can now set the stream state as open
+	stream.mu.Lock()
 	stream.State = StreamOpen
+	stream.mu.Unlock()
 	n.log.Info().
 		Uint16("circID", cc.CircID).
 		Uint16("streamID", relay.StreamID).
@@ -918,10 +938,14 @@ func (n *node) HandleRelayEndAsOP(relay RelayCell, cc *ClientCircuit) error {
 		return fmt.Errorf("unknown stream %d", relay.StreamID)
 	}
 
+	stream.mu.RLock()
+	currentState := stream.State
+	stream.mu.RUnlock()
+
 	n.log.Info().
 		Uint16("circID", cc.CircID).
 		Uint16("streamID", relay.StreamID).
-		Str("currentState", streamStateToString(stream.State)).
+		Str("currentState", streamStateToString(currentState)).
 		Msg("Stream found, processing RelayEnd")
 
 	// TODO: This should've been a relay teardown message instead of a relay end message
@@ -930,12 +954,14 @@ func (n *node) HandleRelayEndAsOP(relay RelayCell, cc *ClientCircuit) error {
 	// For now, we handle it as a normal RelayEnd
 
 	// Peer asked to close the stream
-	if stream.State == StreamWaitingForConnected {
+	if currentState == StreamWaitingForConnected {
 		n.log.Info().
 			Uint16("circID", cc.CircID).
 			Uint16("streamID", relay.StreamID).
 			Msg("Stream was WaitingForConnected, transitioning to FullyClosed and deleting stream")
+		stream.mu.Lock()
 		stream.State = StreamFullyClosed
+		stream.mu.Unlock()
 		n.DeleteStream(cc.CircID, stream)
 		n.log.Info().
 			Uint16("circID", cc.CircID).
@@ -944,21 +970,25 @@ func (n *node) HandleRelayEndAsOP(relay RelayCell, cc *ClientCircuit) error {
 		return nil
 	}
 
-	if stream.State == StreamOpen {
+	if currentState == StreamOpen {
 		n.log.Info().
 			Uint16("circID", cc.CircID).
 			Uint16("streamID", relay.StreamID).
 			Msg("Stream was Open, transitioning to HalfClosedRemote and sending RelayEnd")
+		stream.mu.Lock()
 		stream.State = StreamHalfClosedRemote
+		stream.mu.Unlock()
 		return n.SendRelayEndAsClient(cc.CircID, stream.ID)
 	}
 
-	if stream.State == StreamHalfClosedLocal {
+	if currentState == StreamHalfClosedLocal {
 		n.log.Info().
 			Uint16("circID", cc.CircID).
 			Uint16("streamID", relay.StreamID).
 			Msg("Stream was HalfClosedLocal, transitioning to FullyClosed and closing socket")
+		stream.mu.Lock()
 		stream.State = StreamFullyClosed
+		stream.mu.Unlock()
 		if stream.Sock != nil {
 			stream.Sock.Close()
 		}
@@ -1407,12 +1437,19 @@ func (n *node) CloseStream(circID, streamID uint16) error {
 
 	stream := n.GetStream(circID, streamID)
 	if stream != nil {
+		stream.mu.RLock()
+		prevState := stream.State
+		stream.mu.RUnlock()
+
 		n.log.Info().
 			Uint16("circID", circID).
 			Uint16("streamID", streamID).
-			Str("previousState", streamStateToString(stream.State)).
+			Str("previousState", streamStateToString(prevState)).
 			Msg("Stream found, transitioning to HalfClosedLocal")
+
+		stream.mu.Lock()
 		stream.State = StreamHalfClosedLocal
+		stream.mu.Unlock()
 	} else {
 		n.log.Warn().
 			Uint16("circID", circID).
