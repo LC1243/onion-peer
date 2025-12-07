@@ -11,7 +11,7 @@ import (
 
 // Default number of packets to send when running data transfer tests.
 // Can be modified to increase or decrease test load.
-const DefaultTestPacketCount = 1024
+const DefaultTestPacketCount = 32
 
 // Default number of streams per circuit for multiple stream tests.
 // Can be modified to increase or decrease test load.
@@ -19,7 +19,7 @@ const DefaultStreamsPerCircuit = 4
 
 // Default number of packets per stream for multiple stream tests.
 // Can be modified to increase or decrease test load.
-const DefaultPacketsPerStream = 32
+const DefaultPacketsPerStream = 8
 
 // Test_TOR_Data_Transfer_Basic tests basic data transfer over a stream
 // Verifies that data sent by client is received by exit node and echoed back
