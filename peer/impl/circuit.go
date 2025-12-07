@@ -1468,26 +1468,8 @@ func (n *node) sendRelayBegin(
 	return nil
 }
 
-// CloseStream implements Tor.CloseStream
-// closes a stream from the OP side by sending RELAY_END.
-func (n *node) CloseStream(circID, streamID uint16) error {
-	n.log.Info().
-		Uint16("circID", circID).
-		Uint16("streamID", streamID).
-		Msg("Closing stream from OP side")
-
-	// Look up the client circuit
-	n.clientCircuitsMu.RLock()
-	cc, exists := n.clientCircuits[circID]
-	n.clientCircuitsMu.RUnlock()
-	if !exists {
-		n.log.Error().
-			Uint16("circID", circID).
-			Uint16("streamID", streamID).
-			Msg("Cannot close stream: unknown client circuit")
-		return fmt.Errorf("unknown client circuit %d", circID)
-	}
-
+// transitionStreamToHalfClosed transitions a stream to HalfClosedLocal state
+func (n *node) transitionStreamToHalfClosed(circID, streamID uint16) {
 	stream := n.GetStream(circID, streamID)
 	if stream != nil {
 		stream.mu.RLock()
@@ -1509,16 +1491,14 @@ func (n *node) CloseStream(circID, streamID uint16) error {
 			Uint16("streamID", streamID).
 			Msg("Stream not found when trying to close")
 	}
+}
 
-	cryptoStates := n.circuitCryptoStates[circID]
-	if len(cryptoStates) == 0 {
-		n.log.Error().
-			Uint16("circID", circID).
-			Uint16("streamID", streamID).
-			Msg("Cannot close stream: no crypto states found for circuit")
-		return fmt.Errorf("no crypto states found for circuit %d", circID)
-	}
-
+// encryptAndSendRelayEnd creates and sends a RELAY_END cell
+func (n *node) encryptAndSendRelayEnd(
+	circID, streamID uint16,
+	cryptoStates []*CircuitCryptoState,
+	guardAddr string,
+) error {
 	n.log.Info().
 		Uint16("circID", circID).
 		Uint16("streamID", streamID).
@@ -1557,23 +1537,61 @@ func (n *node) CloseStream(circID, streamID uint16) error {
 	n.log.Info().
 		Uint16("circID", circID).
 		Uint16("streamID", streamID).
-		Str("guard", cc.Hops[0]).
+		Str("guard", guardAddr).
 		Msg("Sending RELAY_END to guard")
 
-	err = n.SendCell(cc.Hops[0], cell)
+	err = n.SendCell(guardAddr, cell)
 	if err != nil {
 		n.log.Error().
 			Err(err).
 			Uint16("circID", circID).
 			Uint16("streamID", streamID).
 			Msg("Failed to send RELAY_END")
-	} else {
-		n.log.Info().
+		return err
+	}
+
+	n.log.Info().
+		Uint16("circID", circID).
+		Uint16("streamID", streamID).
+		Msg("RELAY_END sent successfully")
+	return nil
+}
+
+// CloseStream implements Tor.CloseStream
+// closes a stream from the OP side by sending RELAY_END.
+func (n *node) CloseStream(circID, streamID uint16) error {
+	n.log.Info().
+		Uint16("circID", circID).
+		Uint16("streamID", streamID).
+		Msg("Closing stream from OP side")
+
+	// Look up the client circuit
+	n.clientCircuitsMu.RLock()
+	cc, exists := n.clientCircuits[circID]
+	n.clientCircuitsMu.RUnlock()
+	if !exists {
+		n.log.Error().
 			Uint16("circID", circID).
 			Uint16("streamID", streamID).
-			Msg("RELAY_END sent successfully")
+			Msg("Cannot close stream: unknown client circuit")
+		return fmt.Errorf("unknown client circuit %d", circID)
 	}
-	return err
+
+	// Transition stream state
+	n.transitionStreamToHalfClosed(circID, streamID)
+
+	// Get crypto states
+	cryptoStates := n.circuitCryptoStates[circID]
+	if len(cryptoStates) == 0 {
+		n.log.Error().
+			Uint16("circID", circID).
+			Uint16("streamID", streamID).
+			Msg("Cannot close stream: no crypto states found for circuit")
+		return fmt.Errorf("no crypto states found for circuit %d", circID)
+	}
+
+	// Encrypt and send RELAY_END
+	return n.encryptAndSendRelayEnd(circID, streamID, cryptoStates, cc.Hops[0])
 }
 
 // GetCircuitsNbr returns the number of relay circuits (for testing)
