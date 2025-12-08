@@ -5,6 +5,7 @@ export GORACE = halt_on_error=1
 export GNODES = 10
 # how many benchmark iterations to average on
 export BENCHTIME = "10x"
+export PEER_BIN_PATH = dummy
 
 all: lint vet test
 
