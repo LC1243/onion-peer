@@ -66,10 +66,20 @@ type TorStreams interface {
 	HasStream(circID, streamID uint16) bool
 
 	// ContainsStream reports whether a relay circuit contains a given stream (relay/exit side)
+	// TODO: This function serves no purpose and should be removed. HasStream does the same thing.
 	ContainsStream(circID, streamID uint16) bool
 
 	// HasStreams reports whether a circuit has any stream or is empty
 	HasStreams(circID uint16) (uint16, error)
+
+	// This function is used by the client to send data over a stream.
+	SendStreamData(circID, streamID uint16, data []byte) error
+
+	// Get the packets sent over a stream (for testing)
+	GetStreamPackets(circID, streamID uint16) ([][]byte, error)
+
+	// Get the packets received over a stream (for testing)
+	GetReceivedStreamPackets(circID, streamID uint16) ([][]byte, error)
 }
 
 // Factory is the type of function we are using to create new instances of
