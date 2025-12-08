@@ -13,6 +13,7 @@ type Peer interface {
 	Service
 	Messaging
 	Tor
+	TorStreams
 }
 
 // Tor defines the interface for Tor-like onion routing functionality.
@@ -47,6 +48,38 @@ type Tor interface {
 
 	// GetClientCircuitsNbr returns the number of active client circuits managed by the peer.
 	GetClientCircuitsNbr() int
+
+	// GetCircuitIDs returns all tracked circuit IDs (for testing)
+	GetCircuitIDs() []uint16
+}
+
+// TorStreams defines the interface for Tor-like streams.
+type TorStreams interface {
+
+	// OpenStream opens a new RELAY_BEGIN stream to targetAddr over a ready circuit. Returns the new streamID.
+	OpenStream(circID uint16, targetAddr string) (uint16, error)
+
+	// CloseStream sends RELAY_END for a stream and marks it closed locally.
+	CloseStream(circID, streamID uint16) error
+
+	// HasStream reports whether a stream exists for a given circuit (client side)
+	HasStream(circID, streamID uint16) bool
+
+	// ContainsStream reports whether a relay circuit contains a given stream (relay/exit side)
+	// TODO: This function serves no purpose and should be removed. HasStream does the same thing.
+	ContainsStream(circID, streamID uint16) bool
+
+	// HasStreams reports whether a circuit has any stream or is empty
+	HasStreams(circID uint16) (uint16, error)
+
+	// This function is used by the client to send data over a stream.
+	SendStreamData(circID, streamID uint16, data []byte) error
+
+	// Get the packets sent over a stream (for testing)
+	GetStreamPackets(circID, streamID uint16) ([][]byte, error)
+
+	// Get the packets received over a stream (for testing)
+	GetReceivedStreamPackets(circID, streamID uint16) ([][]byte, error)
 }
 
 // Factory is the type of function we are using to create new instances of

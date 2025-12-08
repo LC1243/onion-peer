@@ -125,7 +125,7 @@ func (n *node) BeginHandshake(
 		PublicKey:  publicKey,
 	}
 
-	// Encrypt the public key with with public onion key
+	// Encrypt the public key with the public onion key
 	// E(g^x1)
 	ciphertext, err := rsa.EncryptOAEP(sha256.New(), rand.Reader, publicOnionKey, publicKey[:], nil)
 	if err != nil {
@@ -382,7 +382,7 @@ func DecryptRelayPayload(
 	hash := h.Sum(nil)
 	var actualDigest [6]byte
 	copy(actualDigest[:], hash[:6])
-	// TODO: Re-enable digest verification
+	// FIXME: Digest verification fails!
 	// if !bytes.Equal(expectedDigest[:], actualDigest[:]) {
 	// 	return nil, errors.New("digest verification failed")
 	// }

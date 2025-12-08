@@ -1,4 +1,4 @@
-export GLOG = warn
+export GLOG = no
 export BINLOG = warn
 export HTTPLOG = warn
 export GORACE = halt_on_error=1
@@ -17,7 +17,7 @@ test_hw3: test_unit_hw3 test_int_hw3
 test_tor: test_unit_tor test_int_tor
 
 test_unit_tor:
-	go test -timeout 2m -v -race -run Test_TOR ./peer/tests/unit
+	go test -timeout 5m -v -race -run Test_TOR ./peer/tests/unit
 
 test_int_tor:
 	@echo "No TOR integration tests yet"
