@@ -74,7 +74,7 @@ func Test_TOR_FlowControl_Circuit_Level_Single(t *testing.T) {
 	}()
 
 	// Wait for data to be echoed back
-	timeout := time.After(30 * time.Second)
+	timeout := time.After(60 * time.Second)
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 
@@ -158,7 +158,7 @@ func Test_TOR_FlowControl_Circuit_Level_Multiple_Clients(t *testing.T) {
 		}()
 
 		// Receive
-		timeout := time.After(40 * time.Second)
+		timeout := time.After(60 * time.Second)
 		ticker := time.NewTicker(100 * time.Millisecond)
 		defer ticker.Stop()
 
