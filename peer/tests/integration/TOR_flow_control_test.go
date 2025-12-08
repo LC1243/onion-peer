@@ -153,7 +153,7 @@ func Test_TOR_FlowControl_Circuit_Level_Multiple_Clients(t *testing.T) {
 					time.Sleep(10 * time.Millisecond)
 				}
 				// Small delay to avoid UDP buffer overflow
-				time.Sleep(2 * time.Millisecond)
+				time.Sleep(3 * time.Millisecond)
 			}
 		}()
 
