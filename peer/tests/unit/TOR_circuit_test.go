@@ -1,36 +1,12 @@
 package unit
 
 import (
-	"crypto/rsa"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 	z "go.dedis.ch/cs438/internal/testing"
 )
-
-// populateOnionKeys distributes all nodes' public onion keys to all other nodes.
-// This simulates a key distribution mechanism (e.g., a directory service).
-// Call this after all nodes have been created and started.
-func populateOnionKeys(nodes []z.TestNode) {
-	for i, node := range nodes {
-		pubKeyInterface := node.Peer.GetOnionPublicKey()
-		if pubKeyInterface == nil {
-			continue
-		}
-		pubKey, ok := pubKeyInterface.(*rsa.PublicKey)
-		if !ok {
-			continue
-		}
-
-		// Add this node's public key to all other nodes
-		for j, otherNode := range nodes {
-			if i != j {
-				otherNode.Peer.AddPeerOnionKey(node.GetAddr(), pubKey)
-			}
-		}
-	}
-}
 
 // Test_TOR_Circuit_Create_Simple tests that a single Create/Created handshake works
 func Test_TOR_Circuit_Create_Simple(t *testing.T) {
@@ -87,7 +63,7 @@ func Test_TOR_Circuit_BuildCircuit_ThreeHops(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Populate onion public keys for all nodes
-	populateOnionKeys(nodes)
+	z.PopulateOnionKeys(nodes)
 
 	hops := [3]string{guard.GetAddr(), middle.GetAddr(), exit.GetAddr()}
 
@@ -151,7 +127,7 @@ func Test_TOR_Circuit_MultipleCircuits(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Populate onion public keys for all nodes
-	populateOnionKeys(nodes)
+	z.PopulateOnionKeys(nodes)
 
 	hops := [3]string{guard.GetAddr(), middle.GetAddr(), exit.GetAddr()}
 
@@ -211,7 +187,7 @@ func Test_TOR_Circuit_Destroy_ClientInitiated_Success(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Populate onion public keys for all nodes
-	populateOnionKeys(nodes)
+	z.PopulateOnionKeys(nodes)
 
 	hops := [3]string{guard.GetAddr(), middle.GetAddr(), exit.GetAddr()}
 
@@ -276,7 +252,7 @@ func Test_TOR_Circuit_Destroy_RelayInitiated_Success(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Populate onion public keys for all nodes
-	populateOnionKeys(nodes)
+	z.PopulateOnionKeys(nodes)
 
 	hops := [3]string{guard.GetAddr(), middle.GetAddr(), exit.GetAddr()}
 
@@ -357,8 +333,8 @@ func Test_TOR_Circuit_Cleanup_ClientInitiated_Success(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Populate onion public keys for all nodes
-	populateOnionKeys(nodes1)
-	populateOnionKeys(nodes2)
+	z.PopulateOnionKeys(nodes1)
+	z.PopulateOnionKeys(nodes2)
 
 	hops1 := [3]string{guard1.GetAddr(), middle.GetAddr(), exit1.GetAddr()}
 	hops2 := [3]string{guard2.GetAddr(), middle.GetAddr(), exit2.GetAddr()}

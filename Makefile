@@ -20,7 +20,7 @@ test_unit_tor:
 	go test -timeout 5m -v -race -run Test_TOR ./peer/tests/unit
 
 test_int_tor:
-	@echo "No TOR integration tests yet"
+	go test -timeout 5m -v -race -run Test_TOR ./peer/tests/integration
 
 test_unit_hw0:
 	go test -timeout 2m -v -race -run Test_HW0 ./peer/tests/unit

@@ -41,7 +41,7 @@ func Build3HopCircuit(t *testing.T) (client, guard, middle, exit z.TestNode, cir
 	time.Sleep(100 * time.Millisecond)
 
 	// Populate onion keys
-	populateOnionKeys(nodes)
+	z.PopulateOnionKeys(nodes)
 
 	hops := [3]string{guard.GetAddr(), middle.GetAddr(), exit.GetAddr()}
 

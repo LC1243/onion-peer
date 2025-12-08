@@ -2,6 +2,7 @@ package testing
 
 import (
 	"bytes"
+	"crypto/rsa"
 	"time"
 
 	"encoding/json"
@@ -509,4 +510,27 @@ func NewSenderSocket(transp transport.Transport, address string) (transport.Clos
 // if this is a binnode.
 type Terminable interface {
 	Terminate() error
+}
+
+// PopulateOnionKeys distributes all nodes' public onion keys to all other nodes.
+// This simulates a key distribution mechanism (e.g., a directory service).
+// Call this after all nodes have been created and started.
+func PopulateOnionKeys(nodes []TestNode) {
+	for i, node := range nodes {
+		pubKeyInterface := node.Peer.GetOnionPublicKey()
+		if pubKeyInterface == nil {
+			continue
+		}
+		pubKey, ok := pubKeyInterface.(*rsa.PublicKey)
+		if !ok {
+			continue
+		}
+
+		// Add this node's public key to all other nodes
+		for j, otherNode := range nodes {
+			if i != j {
+				otherNode.Peer.AddPeerOnionKey(node.GetAddr(), pubKey)
+			}
+		}
+	}
 }
