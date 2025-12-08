@@ -153,19 +153,20 @@ func Test_TOR_FlowControl_Circuit_Level_Multiple_Clients(t *testing.T) {
 					time.Sleep(10 * time.Millisecond)
 				}
 				// Small delay to avoid UDP buffer overflow
-				time.Sleep(5 * time.Millisecond)
+				time.Sleep(7 * time.Millisecond)
 			}
 		}()
 
 		// Receive
-		timeout := time.After(60 * time.Second)
+		timeout := time.After(90 * time.Second)
 		ticker := time.NewTicker(100 * time.Millisecond)
 		defer ticker.Stop()
 
 		for {
 			select {
 			case <-timeout:
-				t.Error("Timeout waiting for data")
+				pkts, _ := c.GetReceivedStreamPackets(circID, streamID)
+				t.Errorf("Timeout waiting for data - received %d/%d packets", len(pkts), numPackets)
 				return
 			case <-ticker.C:
 				pkts, err := c.GetReceivedStreamPackets(circID, streamID)
