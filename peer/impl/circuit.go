@@ -2346,36 +2346,41 @@ func (n *node) HandleRelayData(relay RelayCell, circ *Circuit) error {
 		Int("dataLen", len(relay.Data)).
 		Msg("Stored received data, sending reply back to client")
 
-	// Flow Control: Decrement PackageWindow for the reply
-	n.circuitsMu.Lock()
-	for circ.PackageWindow <= 0 {
-		circ.WindowCond.Wait()
-	}
-	circ.PackageWindow--
-	n.circuitsMu.Unlock()
+	// Send reply asynchronously to avoid blocking the message handler loop
+	// This prevents deadlocks where we wait for a SENDME that can't be processed
+	go func() {
+		// Flow Control: Decrement PackageWindow for the reply
+		n.circuitsMu.Lock()
+		for circ.PackageWindow <= 0 {
+			circ.WindowCond.Wait()
+		}
+		circ.PackageWindow--
+		n.circuitsMu.Unlock()
 
-	// Stream Flow Control: Decrement PackageWindow for the reply
-	stream.mu.Lock()
-	for stream.PackageWindow <= 0 {
-		stream.WindowCond.Wait()
-	}
-	stream.PackageWindow--
-	stream.mu.Unlock()
+		// Stream Flow Control: Decrement PackageWindow for the reply
+		stream.mu.Lock()
+		for stream.PackageWindow <= 0 {
+			stream.WindowCond.Wait()
+		}
+		stream.PackageWindow--
+		stream.mu.Unlock()
 
-	// Send a reply back to the client with the same payload
-	// ASSUMPTION: exit node is the last hop, so use the last crypto state
-	exitIdx := len(n.circuitCryptoStates[circ.InCircID]) - 1
-	crypto := n.circuitCryptoStates[circ.InCircID][exitIdx]
+		// Send a reply back to the client with the same payload
+		// ASSUMPTION: exit node is the last hop, so use the last crypto state
+		exitIdx := len(n.circuitCryptoStates[circ.InCircID]) - 1
+		crypto := n.circuitCryptoStates[circ.InCircID][exitIdx]
 
-	err = n.encryptAndSendReply(circ.InCircID, relay.StreamID, relay.Data, crypto, circ.PrevHop)
-	if err != nil {
-		return err
-	}
+		err = n.encryptAndSendReply(circ.InCircID, relay.StreamID, relay.Data, crypto, circ.PrevHop)
+		if err != nil {
+			n.log.Error().Err(err).Msg("Failed to send reply")
+			return
+		}
 
-	n.log.Info().
-		Uint16("circID", circ.InCircID).
-		Uint16("streamID", relay.StreamID).
-		Msg("RELAY_DATA handled and reply sent successfully")
+		n.log.Info().
+			Uint16("circID", circ.InCircID).
+			Uint16("streamID", relay.StreamID).
+			Msg("RELAY_DATA handled and reply sent successfully")
+	}()
 
 	return nil
 }
