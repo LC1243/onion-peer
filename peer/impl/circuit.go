@@ -24,6 +24,9 @@ type Circuit struct {
 	PackageWindow int // Number of cells that can be sent
 	DeliverWindow int // Number of cells that can be received
 	WindowCond    *sync.Cond
+
+	// Crypto synchronization
+	CryptoMu sync.Mutex // Protects access to circuitCryptoStates for this circuit
 }
 
 // Stream definition
@@ -473,7 +476,6 @@ func (n *node) HandleForwardRelay(cell Cell, circ *Circuit) error {
 
 	// Flow Control: Relays do not decrement the circuit window for cells that they are just relaying
 	// So we do NOT decrement PackageWindow here
-
 
 	// Recompute digest for the decrypted data
 	h := sha256.New()
@@ -2367,10 +2369,12 @@ func (n *node) HandleRelayData(relay RelayCell, circ *Circuit) error {
 
 		// Send a reply back to the client with the same payload
 		// ASSUMPTION: exit node is the last hop, so use the last crypto state
+		circ.CryptoMu.Lock()
 		exitIdx := len(n.circuitCryptoStates[circ.InCircID]) - 1
 		crypto := n.circuitCryptoStates[circ.InCircID][exitIdx]
 
 		err = n.encryptAndSendReply(circ.InCircID, relay.StreamID, relay.Data, crypto, circ.PrevHop)
+		circ.CryptoMu.Unlock()
 		if err != nil {
 			n.log.Error().Err(err).Msg("Failed to send reply")
 			return
