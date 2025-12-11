@@ -45,11 +45,11 @@ var (
 	hsRegistry   = make(map[string]*ServiceDescriptor)
 )
 
-// CreateHiddenService generates a new hidden service
-func (n *node) CreateHiddenService() (*HiddenService, error) {
+// CreateHiddenService implements peer.TorHiddenServices
+func (n *node) CreateHiddenService() (string, error) {
 	key, err := GenerateOnionKeyPair()
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 
 	pub := x509.MarshalPKCS1PublicKey(key.Public)
@@ -62,11 +62,10 @@ func (n *node) CreateHiddenService() (*HiddenService, error) {
 	}
 
 	n.hiddenServices[serviceID] = hs
-	return hs, nil
+	return serviceID, nil
 }
 
-// EstablishIntroPoint tells the exit OR on circID that it should act
-// as an introduction point for Bob's hidden service.
+// EstablishIntroPoint implements Tor.HiddenServices
 func (n *node) EstablishIntroPoint(serviceID string, circID uint16) error {
 	hs, ok := n.hiddenServices[serviceID]
 	if !ok {
@@ -136,15 +135,17 @@ func (n *node) HandleRelayEstablishIntro(relay RelayCell, circ *Circuit) error {
 		BobCircID:  circ.InCircID,
 	}
 
+	n.introPointsMu.Lock()
 	n.introPoints[serviceID] = append(n.introPoints[serviceID], state)
+	n.introPointsMu.Unlock()
 	return nil
 }
 
-// BuildServiceDescriptor builds a service descriptor which is to be published to the Lookup service
-func (n *node) BuildServiceDescriptor(serviceID string, introORs []string, lifetime time.Duration) (*ServiceDescriptor, error) {
+// BuildServiceDescriptor implements peer.TorHiddenServices
+func (n *node) BuildServiceDescriptor(serviceID string, introORs []string, lifetime time.Duration) error {
 	hs, ok := n.hiddenServices[serviceID]
 	if !ok {
-		return nil, fmt.Errorf("unknown serviceID %s", serviceID)
+		return fmt.Errorf("unknown serviceID %s", serviceID)
 	}
 
 	pubBytes := x509.MarshalPKCS1PublicKey(hs.KeyPair.Public)
@@ -171,11 +172,12 @@ func (n *node) BuildServiceDescriptor(serviceID string, introORs []string, lifet
 	hash := sha256.Sum256(buf.Bytes())
 	sig, err := rsa.SignPKCS1v15(rand.Reader, hs.KeyPair.Private, crypto.SHA256, hash[:])
 	if err != nil {
-		return nil, fmt.Errorf("sign service descriptor: %w", err)
+		return fmt.Errorf("sign service descriptor: %w", err)
 	}
 	desc.Signature = sig
 
-	return desc, nil
+	PublishServiceDescriptor(desc)
+	return nil
 }
 
 // PublishServiceDescriptor registers a service descriptor for the Lookup service
@@ -197,4 +199,39 @@ func LookupServiceDescriptor(serviceID string) (*ServiceDescriptor, bool) {
 		return nil, false
 	}
 	return desc, true
+}
+
+// GetServiceIntroPoints implements peer.TorHiddenServices
+func (n *node) GetServiceIntroPoints(serviceID string) []string {
+	hs, ok := n.hiddenServices[serviceID]
+	if !ok {
+		return nil
+	}
+	out := make([]string, len(hs.IntroPoints))
+	for i, p := range hs.IntroPoints {
+		out[i] = p.RouterAddr
+	}
+	return out
+}
+
+// GetIntroPointCount implements peer.TorHiddenServices
+func (n *node) GetIntroPointCount(serviceID string) int {
+	return len(n.hiddenServices[serviceID].IntroPoints)
+}
+
+// LookupDescriptor implements peer.TorHiddenServices
+func (n *node) LookupDescriptor(serviceID string) (bool, []string) {
+	desc, ok := LookupServiceDescriptor(serviceID)
+	if !ok {
+		return false, nil
+	}
+	return true, append([]string(nil), desc.IntroPoints...)
+}
+
+// GetIntroPointStateCount implements peer.TorHiddenServices
+func (n *node) GetIntroPointStateCount(serviceID string) int {
+	n.introPointsMu.Lock()
+	defer n.introPointsMu.Unlock()
+	list := n.introPoints[serviceID]
+	return len(list)
 }

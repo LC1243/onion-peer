@@ -14,6 +14,7 @@ type Peer interface {
 	Messaging
 	Tor
 	TorStreams
+	TorHiddenServices
 }
 
 // Tor defines the interface for Tor-like onion routing functionality.
@@ -80,6 +81,31 @@ type TorStreams interface {
 
 	// Get the packets received over a stream (for testing)
 	GetReceivedStreamPackets(circID, streamID uint16) ([][]byte, error)
+}
+
+type TorHiddenServices interface {
+	// CreateHiddenService creates a hidden service and returns its serviceID
+	CreateHiddenService() (string, error)
+
+	// EstablishIntroPoint establishes an intro point for a hidden service.
+	// It tells the exit OR on circID that it should act as an introduction point for Bob's hidden service.
+	EstablishIntroPoint(serviceID string, circID uint16) error
+
+	// BuildServiceDescriptor builds a service descriptor for a hidden service
+	// which is published to the Lookup service
+	BuildServiceDescriptor(serviceID string, introORs []string, lifetime time.Duration) error
+
+	// GetServiceIntroPoints returns the intro points for a hidden service
+	GetServiceIntroPoints(serviceID string) []string
+
+	// GetIntroPointCount returns the number of intro points for a hidden service
+	GetIntroPointCount(serviceID string) int
+
+	// LookupDescriptor looks up a service descriptor (exists, introduction points[])
+	LookupDescriptor(serviceID string) (bool, []string)
+
+	// GetIntroPointStateCount returns the number of intro points that have been established
+	GetIntroPointStateCount(serviceID string) int
 }
 
 // Factory is the type of function we are using to create new instances of

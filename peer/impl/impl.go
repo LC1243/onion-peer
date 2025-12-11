@@ -152,6 +152,7 @@ type node struct {
 	hiddenServices map[string]*HiddenService
 
 	introPoints map[string][]*IntroPointState // serviceID -> state
+	introPointsMu sync.RWMutex
 }
 
 // Start implements peer.Service
