@@ -77,7 +77,6 @@ func (n *node) EstablishIntroPoint(serviceID string, circID uint16) error {
 
 	cryptoStates := n.circuitCryptoStates[circID]
 	if len(cryptoStates) == 0 {
-		n.log.Info().Msgf("client has circuits: %s", n.GetCircuitIDs())
 		return fmt.Errorf("no crypto state for circ %d", circID)
 	}
 
