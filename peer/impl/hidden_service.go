@@ -77,6 +77,7 @@ func (n *node) EstablishIntroPoint(serviceID string, circID uint16) error {
 
 	cryptoStates := n.circuitCryptoStates[circID]
 	if len(cryptoStates) == 0 {
+		n.log.Info().Msgf("client has circuits: %s", n.GetCircuitIDs())
 		return fmt.Errorf("no crypto state for circ %d", circID)
 	}
 
@@ -104,6 +105,7 @@ func (n *node) EstablishIntroPoint(serviceID string, circID uint16) error {
 		return fmt.Errorf("not a client circuit %d", circID)
 	}
 
+	//TODO: Simplified, Bob can choose the OR that acts as a introduction point
 	hs.IntroPoints = append(hs.IntroPoints, IntroPoint{
 		RouterAddr: cc.Hops[2], // exit hop
 		CircID:     circID,
