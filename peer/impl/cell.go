@@ -40,6 +40,11 @@ const (
 	RelayTruncated = 9
 	RelaySendme    = 10
 	RelayDrop      = 11
+	// new messages for hidden services
+	RelayEstablishIntro = 12 // Bob -> OR
+	RelayIntroduce1     = 13 // Alice -> Intro Point (intro message)
+	RelayRendezvous1    = 14 // Bob -> RP (cookie + DH half + H(K))
+	RelayEstablishRP    = 15 // Alice -> RP (associate cookie with her circuit)
 )
 
 type Cell struct {

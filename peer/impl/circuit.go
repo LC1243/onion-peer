@@ -428,6 +428,12 @@ func (n *node) HandleForwardRelay(cell Cell, circ *Circuit) error {
 			return n.HandleRelayData(relayCell, circ)
 		case RelaySendme:
 			return n.HandleRelaySendme(relayCell, circ)
+		case RelayIntroduce1:
+			return nil
+		case RelayEstablishIntro:
+			return n.HandleRelayEstablishIntro(relayCell, circ)
+		case RelayRendezvous1:
+			return nil
 		default:
 			return fmt.Errorf("unknown relay command %d", relayCell.Command)
 		}
