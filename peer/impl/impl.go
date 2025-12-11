@@ -55,6 +55,9 @@ func NewPeer(conf peer.Configuration) peer.Peer {
 	n.diffieHellmanHandshakePairs = make(map[uint16]*DiffieHellmanHandshakePairs)
 	n.circuitCryptoStates = make(map[uint16][]*CircuitCryptoState)
 
+	n.hiddenServices = make(map[string]*HiddenService)
+	n.introPoints = make(map[string]*IntroPointState)
+
 	// Generate onion keypair for this node
 	// Note: In production, this should be loaded from persistent storage
 	// For now, we generate a new keypair each time
@@ -143,6 +146,11 @@ type node struct {
 
 	circuitIDMu sync.Mutex // Protects circuit ID generation
 	circuitIDs  []uint16   // Allocated circuit IDs
+
+	serviceKey     *OnionKeyPair // long-term Hidden service identity key
+	hiddenServices map[string]*HiddenService
+
+	introPoints map[string]*IntroPointState // serviceID -> state
 }
 
 // Start implements peer.Service
