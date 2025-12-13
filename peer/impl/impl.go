@@ -32,6 +32,8 @@ func NewPeer(conf peer.Configuration) peer.Peer {
 	level := zerolog.InfoLevel
 	if os.Getenv("GLOG") == "no" {
 		level = zerolog.Disabled
+	} else if os.Getenv("GLOG") == "trace" {
+		level = zerolog.TraceLevel
 	}
 	writer := zerolog.ConsoleWriter{Out: os.Stdout, TimeFormat: time.RFC3339}
 	n.log = zerolog.New(writer).Level(level).With().Timestamp().Logger().

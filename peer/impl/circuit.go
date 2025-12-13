@@ -1396,6 +1396,7 @@ func destroyCircuitAsClient(n *node, initiator bool, circID uint16) error {
 
 // destroyCircuitAsRelay starts or relays circuit teardown as a relay node
 func destroyCircuitAsRelay(n *node, initiator bool, circID uint16, src string) error {
+	n.log.Trace().Msg("destroyCircuitAsRelay: called")
 	key := circuitKey{PrevHop: src, InCircID: circID}
 	n.circuitsMu.RLock()
 	circ, exists := n.circuits[key]
@@ -1410,6 +1411,8 @@ func destroyCircuitAsRelay(n *node, initiator bool, circID uint16, src string) e
 		}
 	}
 	if !exists {
+		n.circuitsMu.RUnlock()
+		n.log.Trace().Msg("destroyCircuitAsRelay: circuit not found")
 		return fmt.Errorf("cannot destroy unknown relay circuit %d from %s", circID, src)
 	}
 

@@ -63,26 +63,30 @@ func (s *CircuitScheduler) Stop() {
 // Schedule queues a packet for sending
 func (s *CircuitScheduler) Schedule(msg transport.Message, dest string, isBulk bool) {
 	qPkt := queuedPacket{dest: dest, msg: msg}
-	if isBulk {
-		s.node.log.Debug().Str("dest", dest).Msg("Scheduling bulk packet")
-		select {
-		case s.bulkCh <- qPkt:
-		default:
-			// If bulk queue is full, drop or block?
-			// For now, we block to apply backpressure, or we could drop.
-			// Given this is a simulation, blocking might be safer to avoid packet loss noise in tests.
-			s.node.log.Warn().Str("dest", dest).Msg("Bulk queue full, blocking")
-			s.bulkCh <- qPkt
+	
+	// Launch a goroutine to avoid blocking the caller (which might hold locks)
+	go func() {
+		if isBulk {
+			s.node.log.Debug().Str("dest", dest).Msg("Scheduling bulk packet")
+			select {
+			case s.bulkCh <- qPkt:
+			default:
+				// If bulk queue is full, drop or block?
+				// For now, we block to apply backpressure, or we could drop.
+				// Given this is a simulation, blocking might be safer to avoid packet loss noise in tests.
+				s.node.log.Warn().Str("dest", dest).Msg("Bulk queue full, blocking")
+				s.bulkCh <- qPkt
+			}
+		} else {
+			s.node.log.Debug().Str("dest", dest).Msg("Scheduling interactive packet")
+			select {
+			case s.interactiveCh <- qPkt:
+			default:
+				s.node.log.Warn().Str("dest", dest).Msg("Interactive queue full, blocking")
+				s.interactiveCh <- qPkt
+			}
 		}
-	} else {
-		s.node.log.Debug().Str("dest", dest).Msg("Scheduling interactive packet")
-		select {
-		case s.interactiveCh <- qPkt:
-		default:
-			s.node.log.Warn().Str("dest", dest).Msg("Interactive queue full, blocking")
-			s.interactiveCh <- qPkt
-		}
-	}
+	}()
 }
 
 // run is the main scheduling loop
@@ -134,22 +138,28 @@ func (s *CircuitScheduler) decayLoop() {
 
 func (s *CircuitScheduler) decayCircuits() {
 	// Decay relay circuits
+	s.node.log.Trace().Msg("Decaying relay circuits: acquiring lock")
 	s.node.circuitsMu.Lock()
+	s.node.log.Trace().Msg("Decaying relay circuits: lock acquired")
 	for _, circ := range s.node.circuits {
 		circ.CryptoMu.Lock()
 		circ.decayPriority()
 		circ.CryptoMu.Unlock()
 	}
 	s.node.circuitsMu.Unlock()
+	s.node.log.Trace().Msg("Decaying relay circuits: lock released")
 
 	// Decay client circuits
+	s.node.log.Trace().Msg("Decaying client circuits: acquiring lock")
 	s.node.clientCircuitsMu.Lock()
+	s.node.log.Trace().Msg("Decaying client circuits: lock acquired")
 	for _, circ := range s.node.clientCircuits {
 		circ.StatsMu.Lock()
 		circ.decayPriority()
 		circ.StatsMu.Unlock()
 	}
 	s.node.clientCircuitsMu.Unlock()
+	s.node.log.Trace().Msg("Decaying client circuits: lock released")
 }
 
 // updatePriority updates the EWMA count and determines if circuit is Bulk
