@@ -106,6 +106,12 @@ type TorHiddenServices interface {
 
 	// GetIntroPointStateCount returns the number of intro points that have been established
 	GetIntroPointStateCount(serviceID string) int
+
+	// CreateHiddenService creates a full hidden service
+	// Create the service locally, builds a circuit, establishes intro points, builds descriptor, publishes descriptor
+	CreateHiddenService(introPoints [][3]string,
+		timeout time.Duration,
+		lifetime time.Duration) (string, []uint16, error)
 }
 
 // Factory is the type of function we are using to create new instances of

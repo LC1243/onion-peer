@@ -31,8 +31,8 @@ func Test_TOR_HS_EstablishIntroPoint_Basic(t *testing.T) {
 	exitOuts := exit.GetOuts()
 	clientIns := client.GetIns()
 
-	require.Len(t, exitIns, len(exitOutsBefore)+1)
-	require.Len(t, exitOuts, len(exitInsBefore)+1)
+	require.Len(t, exitIns, len(exitInsBefore)+1)
+	require.Len(t, exitOuts, len(exitOutsBefore)+1)
 	require.Len(t, clientIns, len(clientInsBefore)+1)
 
 	// 1. Client-side intro point recording
@@ -181,13 +181,17 @@ func Test_TOR_HS_DescriptorExpired(t *testing.T) {
 	serviceID, _ := client.Peer.GenerateHiddenServiceID()
 
 	// Build descriptor that expires immediately
-	err := client.Peer.BuildServiceDescriptor(serviceID, []string{"or1"}, 0)
+	err := client.Peer.BuildServiceDescriptor(serviceID, []string{"or1"}, 2*time.Second)
 	require.NoError(t, err)
 
-	time.Sleep(20 * time.Millisecond)
-
 	ok, _ := client.Peer.LookupDescriptor(serviceID)
+	require.True(t, ok, "descriptor should not be expired")
+
+	time.Sleep(2 * time.Second)
+
+	ok, _ = client.Peer.LookupDescriptor(serviceID)
 	require.False(t, ok, "descriptor should be expired")
+
 }
 
 // Test_TOR_HS_DescriptorPublish_AndLookup tests the process of publishing a hidden service descriptor and looking it up
@@ -210,4 +214,123 @@ func Test_TOR_HS_DescriptorPublish_AndLookup(t *testing.T) {
 	require.NotNil(t, found)
 
 	require.Equal(t, introORs, found)
+}
+
+// Test_TOR_HS_CreateHiddenService_Basic tests the process of a full creation of a hidden service
+// It involves creating a circuit, establishing an intro point, and publishing a descriptor.
+// High level test for Hidden Service creation.
+func Test_TOR_HS_CreateHiddenService_Basic(t *testing.T) {
+	transp := channelFac()
+
+	client := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer client.Stop()
+
+	// First circuit: guard1 → middle1 → exit1
+	guard := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer guard.Stop()
+	middle := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer middle.Stop()
+	exit := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer exit.Stop()
+
+	// Full mesh so Tor cells can route
+	nodes := []z.TestNode{
+		client,
+		guard, middle, exit,
+	}
+	for i, n1 := range nodes {
+		for j, n2 := range nodes {
+			if i != j {
+				n1.AddPeer(n2.GetAddr())
+			}
+		}
+	}
+
+	time.Sleep(100 * time.Millisecond)
+	populateOnionKeys(nodes)
+
+	hops := [][3]string{
+		{guard.GetAddr(), middle.GetAddr(), exit.GetAddr()},
+	}
+
+	serviceID, circuits, err := client.Peer.CreateHiddenService(
+		hops,
+		5*time.Second,
+		time.Minute,
+	)
+
+	require.NoError(t, err)
+	require.NotEmpty(t, serviceID)
+	require.Len(t, circuits, 1)
+
+	// Local introduction point recorded
+	intros := client.Peer.GetServiceIntroPoints(serviceID)
+	require.Len(t, intros, 1)
+	require.Equal(t, exit.GetAddr(), intros[0])
+
+	// Exit stored introduction state
+	count := exit.Peer.GetIntroPointStateCount(serviceID)
+	require.Equal(t, 1, count)
+
+	// Descriptor published and retrievable
+	ok, introORs := client.Peer.LookupDescriptor(serviceID)
+	require.True(t, ok)
+	require.Len(t, introORs, 1)
+	require.Equal(t, exit.GetAddr(), introORs[0])
+}
+
+// Test_TOR_HS_CreateHiddenService_MultipleIntroPoints tests the creation of a hidden service with multiple intro points
+// High level test for Hidden Service creation.
+func Test_TOR_HS_CreateHiddenService_MultipleIntroPoints(t *testing.T) {
+	transp := channelFac()
+
+	client := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer client.Stop()
+
+	// create 2 separate paths
+	guard1 := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	middle1 := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	exit1 := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+
+	guard2 := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	middle2 := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	exit2 := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+
+	nodes := []z.TestNode{
+		client,
+		guard1, middle1, exit1,
+		guard2, middle2, exit2,
+	}
+	for i, n1 := range nodes {
+		for j, n2 := range nodes {
+			if i != j {
+				n1.AddPeer(n2.GetAddr())
+			}
+		}
+	}
+
+	time.Sleep(100 * time.Millisecond)
+	populateOnionKeys(nodes)
+
+	introPaths := [][3]string{
+		{guard1.GetAddr(), middle1.GetAddr(), exit1.GetAddr()},
+		{guard2.GetAddr(), middle2.GetAddr(), exit2.GetAddr()},
+	}
+
+	serviceID, circuits, err := client.Peer.CreateHiddenService(
+		introPaths,
+		5*time.Second,
+		time.Minute,
+	)
+
+	require.NoError(t, err)
+	require.Len(t, circuits, 2)
+
+	intros := client.Peer.GetServiceIntroPoints(serviceID)
+	require.Len(t, intros, 2)
+	require.Contains(t, intros, exit1.GetAddr())
+	require.Contains(t, intros, exit2.GetAddr())
+
+	require.Equal(t, 1, exit1.Peer.GetIntroPointStateCount(serviceID))
+	require.Equal(t, 1, exit2.Peer.GetIntroPointStateCount(serviceID))
 }
