@@ -226,3 +226,46 @@ func (fakeFailingTransport) GetAddress() string          { return "fake" }
 func (fakeFailingTransport) GetIns() []transport.Packet  { return nil }
 func (fakeFailingTransport) GetOuts() []transport.Packet { return nil }
 func (fakeFailingTransport) Close() error                { return nil }
+
+// Test_TOR_Stream_FlowControl tests that stream-level flow control works
+// by sending more data than the initial stream window (500 cells).
+func Test_TOR_Stream_FlowControl(t *testing.T) {
+	client, _, _, _, circID := Build3HopCircuit(t)
+
+	// Open stream
+	streamID, err := client.Peer.OpenStream(circID, "dummy:1234")
+	require.NoError(t, err)
+
+	// Send 600 cells (window is 500)
+	numCells := 600
+	payload := []byte("stream-data")
+
+	go func() {
+		// Wait for stream to be fully open
+		time.Sleep(500 * time.Millisecond)
+
+		for i := 0; i < numCells; i++ {
+			err := client.Peer.SendStreamData(circID, streamID, payload)
+			require.NoError(t, err, "Failed to send cell %d", i)
+			time.Sleep(1 * time.Millisecond) // Pacing
+		}
+	}()
+
+	// Wait for all cells
+	timeout := time.After(30 * time.Second)
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-timeout:
+			t.Fatal("Timeout waiting for all cells")
+		case <-ticker.C:
+			pkts, err := client.Peer.GetReceivedStreamPackets(circID, streamID)
+			if err == nil && len(pkts) >= numCells {
+				require.Equal(t, numCells, len(pkts))
+				return
+			}
+		}
+	}
+}
