@@ -320,40 +320,6 @@ func (n *node) HandleRelaySendmeAsOP(relayCell RelayCell, cc *ClientCircuit) err
 	return nil
 }
 
-// sendRelaySendmeAsOP sends a RELAY_SENDME cell as OP
-func (n *node) sendRelaySendmeAsOP(cc *ClientCircuit) error {
-	n.log.Info().
-		Uint16("circID", cc.CircID).
-		Msg("Sending RELAY_SENDME as OP")
-
-	cryptoStates := n.circuitCryptoStates[cc.CircID]
-	encrypted, digest, err := EncryptRelayCellThroughCircuit(cryptoStates, []byte{})
-
-	if err != nil {
-		n.log.Error().
-			Err(err).
-			Uint16("circID", cc.CircID).
-			Msg("Failed to encrypt RELAY_SENDME payload")
-		return err
-	}
-
-	relayCell := RelayCell{
-		CircID:   cc.CircID,
-		StreamID: 0, // Control cell
-		Command:  RelaySendme,
-		Digest:   digest,
-		Data:     encrypted,
-		Length:   uint16(len(encrypted)),
-	}
-
-	cell, _ := n.EncodeRelayCell(relayCell)
-	n.log.Info().
-		Uint16("circID", cc.CircID).
-		Str("guard", cc.Hops[0]).
-		Msg("Sending RELAY_SENDME to guard")
-	return n.SendCell(cc.Hops[0], cell)
-}
-
 func (n *node) sendRelaySendmeStreamAsOP(cc *ClientCircuit, streamID uint16) error {
 	n.log.Info().
 		Uint16("circID", cc.CircID).
@@ -2199,42 +2165,6 @@ func (n *node) encryptAndSendReply(
 	return nil
 }
 
-// sendRelaySendme sends a RELAY_SENDME cell as a relay
-func (n *node) sendRelaySendme(circ *Circuit) error {
-	n.log.Info().
-		Uint16("circID", circ.InCircID).
-		Msg("Sending RELAY_SENDME as relay")
-
-	exitIdx := len(n.circuitCryptoStates[circ.InCircID]) - 1
-	crypto := n.circuitCryptoStates[circ.InCircID][exitIdx]
-
-	encrypted, digest, err := EncryptRelayPayload(
-		crypto,
-		DirectionBackward,
-		[]byte{},
-	)
-
-	if err != nil {
-		n.log.Error().
-			Err(err).
-			Uint16("circID", circ.InCircID).
-			Msg("Failed to encrypt RELAY_SENDME payload")
-		return err
-	}
-
-	relayCell := RelayCell{
-		CircID:   circ.InCircID,
-		StreamID: 0,
-		Command:  RelaySendme,
-		Digest:   digest,
-		Data:     encrypted,
-		Length:   uint16(len(encrypted)),
-	}
-
-	cell, _ := n.EncodeRelayCell(relayCell)
-	return n.SendCell(circ.PrevHop, cell)
-}
-
 func (n *node) sendRelaySendmeStream(circ *Circuit, streamID uint16) error {
 	n.log.Info().
 		Uint16("circID", circ.InCircID).
@@ -2313,7 +2243,7 @@ func (n *node) HandleRelayData(relay RelayCell, circ *Circuit) error {
 	n.circuitsMu.Unlock()
 
 	if shouldSend {
-		if err := n.sendRelaySendme(circ); err != nil {
+		if err := n.sendRelaySendmeStream(circ, 0); err != nil {
 			n.log.Error().Err(err).Msg("Failed to send RELAY_SENDME")
 		}
 	}
@@ -2408,7 +2338,7 @@ func (n *node) HandleRelayDataAsOP(relay RelayCell, cc *ClientCircuit) error {
 	n.clientCircuitsMu.Unlock()
 
 	if shouldSend {
-		if err := n.sendRelaySendmeAsOP(cc); err != nil {
+		if err := n.sendRelaySendmeStreamAsOP(cc, 0); err != nil {
 			n.log.Error().Err(err).Msg("Failed to send RELAY_SENDME")
 		}
 	}
