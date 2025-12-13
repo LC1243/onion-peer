@@ -5,6 +5,16 @@ import (
 	"time"
 )
 
+const (
+	// DefaultRate is the default token refill rate (bytes per second).
+	// 100 KB/s
+	DefaultRate = 100000.0
+
+	// DefaultCapacity is the default maximum burst size (bytes).
+	// 200 KB (2 seconds worth of burst)
+	DefaultCapacity = 200000.0
+)
+
 type TokenBucket struct {
 	rate       float64   // tokens added per second
 	capacity   float64   // maximum number of tokens
