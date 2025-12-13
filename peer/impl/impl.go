@@ -56,6 +56,9 @@ func NewPeer(conf peer.Configuration) peer.Peer {
 	n.writeBucket = NewTokenBucket(DefaultRate, DefaultCapacity)
 	n.readBucket = NewTokenBucket(DefaultRate, DefaultCapacity)
 
+	// Initialize scheduler
+	n.scheduler = NewCircuitScheduler(n)
+
 	// Initialize crypto state
 	n.peerOnionKeys = make(map[string]*rsa.PublicKey)
 	n.diffieHellmanHandshakePairs = make(map[uint16]*DiffieHellmanHandshakePairs)
@@ -157,6 +160,9 @@ type node struct {
 	writeBucket *TokenBucket // Token bucket for outgoing data
 	readBucket  *TokenBucket // Token bucket for incoming data
 	packetCh    chan transport.Packet
+
+	// Fairness Scheduler
+	scheduler *CircuitScheduler
 }
 
 // Start implements peer.Service
@@ -177,6 +183,9 @@ func (n *node) Start() error {
 	// Launch the processing loop
 	n.wg.Add(1)
 	go n.processLoop()
+
+	// Start scheduler
+	n.scheduler.Start()
 
 	// Start anti-entropy loop if configured
 	if n.conf.AntiEntropyInterval > 0 {
@@ -289,6 +298,11 @@ func (n *node) Stop() error {
 	case <-n.stopCh: // already closed
 	default:
 		close(n.stopCh)
+	}
+
+	// Stop scheduler
+	if n.scheduler != nil {
+		n.scheduler.Stop()
 	}
 
 	// Wait for background goroutines.

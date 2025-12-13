@@ -27,6 +27,10 @@ type Circuit struct {
 
 	// Crypto synchronization
 	CryptoMu sync.Mutex // Protects access to circuitCryptoStates for this circuit
+
+	// Fairness / Prioritization
+	CellCount float64 // EWMA of cells sent
+	IsBulk    bool    // True if CellCount > Threshold
 }
 
 // Stream definition
@@ -117,6 +121,11 @@ type ClientCircuit struct {
 	PackageWindow int // Number of cells that can be sent
 	DeliverWindow int // Number of cells that can be received
 	WindowCond    *sync.Cond
+
+	// Fairness / Prioritization
+	StatsMu   sync.Mutex // Protects CellCount and IsBulk
+	CellCount float64    // EWMA of cells sent
+	IsBulk    bool       // True if CellCount > Threshold
 }
 
 // -----------------------------------------------------------------------------
@@ -464,7 +473,7 @@ func (n *node) HandleForwardRelay(cell Cell, circ *Circuit) error {
 	if err != nil {
 		return err
 	}
-	return n.SendCell(circ.NextHop, forwardCell)
+	return n.SendCell(circ.NextHop, forwardCell, circ)
 }
 
 // HandleBackwardRelay handles a relay cell going backward (NextHop -> PrevHop)
@@ -533,7 +542,7 @@ func (n *node) HandleBackwardRelay(cell Cell, circ *Circuit) error {
 		return err
 	}
 
-	return n.SendCell(circ.PrevHop, cellToSend)
+	return n.SendCell(circ.PrevHop, cellToSend, circ)
 }
 
 // HandleRelayBegin opens a stream on a circuit (as an Exit node)
@@ -774,7 +783,9 @@ func (n *node) HandleRelayExtended(_ RelayCell, _ *Circuit) error {
 }
 
 // SendCell sends a cell to a destination
-func (n *node) SendCell(dest string, cell Cell) error {
+// Optional: pass the circuit associated with this cell for fairness accounting
+// circ can be *Circuit or *ClientCircuit
+func (n *node) SendCell(dest string, cell Cell, circ ...interface{}) error {
 	encoded, err := n.EncodeCell(cell)
 	if err != nil {
 		return err
@@ -788,6 +799,28 @@ func (n *node) SendCell(dest string, cell Cell) error {
 	transportMsg, err := n.conf.MessageRegistry.MarshalMessage(&msg)
 	if err != nil {
 		return err
+	}
+
+	// If congestion control is enabled, use the scheduler
+	if n.congestionControl && n.scheduler != nil {
+		isBulk := false
+		if len(circ) > 0 && circ[0] != nil {
+			switch c := circ[0].(type) {
+			case *Circuit:
+				c.CryptoMu.Lock()
+				c.updatePriority()
+				isBulk = c.IsBulk
+				c.CryptoMu.Unlock()
+			case *ClientCircuit:
+				c.StatsMu.Lock()
+				c.updatePriority()
+				isBulk = c.IsBulk
+				c.StatsMu.Unlock()
+			}
+		}
+
+		n.scheduler.Schedule(transportMsg, dest, isBulk)
+		return nil
 	}
 
 	return n.Unicast(dest, transportMsg)
@@ -1965,7 +1998,12 @@ func (n *node) encryptAndSendRelayData(
 		Str("guard", guardAddr).
 		Msg("Sending RELAY_DATA to guard")
 
-	err = n.SendCell(guardAddr, cell)
+	// Look up client circuit for fairness
+	n.clientCircuitsMu.RLock()
+	cc, _ := n.clientCircuits[circID]
+	n.clientCircuitsMu.RUnlock()
+
+	err = n.SendCell(guardAddr, cell, cc)
 	if err != nil {
 		n.log.Error().
 			Err(err).
