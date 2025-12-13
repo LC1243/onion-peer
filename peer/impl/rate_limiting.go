@@ -7,12 +7,13 @@ import (
 
 const (
 	// DefaultRate is the default token refill rate (bytes per second).
-	// 1000 KB/s
-	DefaultRate = 1000000.0
+	// 100 KB/s
+	DefaultRate = 100000.0
 
 	// DefaultCapacity is the default maximum burst size (bytes).
-	// 5000 KB (5 seconds worth of burst)
-	DefaultCapacity = 5000000.0
+	// This should be smaller than typical OS UDP buffer sizes, or channel buffers.
+	// 500 KB
+	DefaultCapacity = DefaultRate * 5.0
 )
 
 type TokenBucket struct {

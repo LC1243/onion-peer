@@ -68,8 +68,7 @@ func Test_TOR_FlowControl_Circuit_Level_Single(t *testing.T) {
 				// Retry if stream is not yet open
 				time.Sleep(10 * time.Millisecond)
 			}
-			// Small delay to avoid UDP buffer overflow
-			time.Sleep(15 * time.Millisecond)
+			time.Sleep(1 * time.Millisecond) // 1 ms sleep is enough with rate limiting
 		}
 	}()
 
@@ -152,13 +151,12 @@ func Test_TOR_FlowControl_Circuit_Level_Multiple_Clients(t *testing.T) {
 					}
 					time.Sleep(10 * time.Millisecond)
 				}
-				// Small delay to avoid UDP buffer overflow
-				time.Sleep(15 * time.Millisecond)
+				time.Sleep(1 * time.Millisecond) // 1 ms sleep is enough with rate limiting
 			}
 		}()
 
 		// Receive
-		timeout := time.After(120 * time.Second)
+		timeout := time.After(60 * time.Second)
 		ticker := time.NewTicker(100 * time.Millisecond)
 		defer ticker.Stop()
 

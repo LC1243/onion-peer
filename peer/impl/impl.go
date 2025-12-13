@@ -26,6 +26,7 @@ func NewPeer(conf peer.Configuration) peer.Peer {
 		stopped:           make(chan struct{}),
 		routing:           map[string]string{},
 		congestionControl: true,
+		packetCh:          make(chan transport.Packet, 2000),
 	}
 	// Configure logger: disabled if GLOG=="no", else enabled at info level to console
 	level := zerolog.InfoLevel
@@ -155,6 +156,7 @@ type node struct {
 	// Rate limiting
 	writeBucket *TokenBucket // Token bucket for outgoing data
 	readBucket  *TokenBucket // Token bucket for incoming data
+	packetCh    chan transport.Packet
 }
 
 // Start implements peer.Service
@@ -171,6 +173,10 @@ func (n *node) Start() error {
 	// Launch the listening loop in a background goroutine so Start returns quickly.
 	n.wg.Add(1)
 	go n.listenLoop()
+
+	// Launch the processing loop
+	n.wg.Add(1)
+	go n.processLoop()
 
 	// Start anti-entropy loop if configured
 	if n.conf.AntiEntropyInterval > 0 {
@@ -198,7 +204,7 @@ func (n *node) Start() error {
 // listenLoop receives packets from the socket and dispatches them.
 func (n *node) listenLoop() {
 	defer n.wg.Done()
-	defer close(n.stopped)
+	defer close(n.packetCh)
 
 	for {
 		select {
@@ -219,6 +225,21 @@ func (n *node) listenLoop() {
 		if err != nil {
 			continue
 		}
+
+		select {
+		case n.packetCh <- pkt:
+		case <-n.stopCh:
+			return
+		}
+	}
+}
+
+// processLoop processes packets from the channel with rate limiting.
+func (n *node) processLoop() {
+	defer n.wg.Done()
+	defer close(n.stopped)
+
+	for pkt := range n.packetCh {
 		// Rate limiting
 		if n.congestionControl {
 			size := CellSize
