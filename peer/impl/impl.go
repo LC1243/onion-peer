@@ -58,6 +58,7 @@ func NewPeer(conf peer.Configuration) peer.Peer {
 	n.serviceKeys = make(map[string]*OnionKeyPair)
 	n.hiddenServices = make(map[string]*HiddenService)
 	n.introPoints = make(map[string][]*IntroPointState)
+	n.introWait = make(map[uint16]chan struct{})
 
 	// Generate onion keypair for this node
 	// Note: In production, this should be loaded from persistent storage
@@ -151,8 +152,12 @@ type node struct {
 	serviceKeys    map[string]*OnionKeyPair
 	hiddenServices map[string]*HiddenService
 
-	introPoints map[string][]*IntroPointState // serviceID -> state
+	introPoints   map[string][]*IntroPointState // serviceID -> state
 	introPointsMu sync.RWMutex
+
+	introWaitMu sync.Mutex
+	introWait   map[uint16]chan struct{} // circID -> done
+
 }
 
 // Start implements peer.Service

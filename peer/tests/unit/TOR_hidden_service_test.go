@@ -11,15 +11,29 @@ import (
 // Test_TOR_HS_EstablishIntroPoint_Basic tests the process of establishing an introduction point for a hidden service.
 func Test_TOR_HS_EstablishIntroPoint_Basic(t *testing.T) {
 	client, _, _, exit, circID := Build3HopCircuit(t)
+	clientOutsBefore := client.GetOuts()
+	clientInsBefore := client.GetIns()
+	exitInsBefore := exit.GetIns()
+	exitOutsBefore := exit.GetOuts()
 
-	serviceID, err := client.Peer.CreateHiddenService()
+	serviceID, err := client.Peer.GenerateHiddenServiceID()
 	require.NoError(t, err)
 	require.NotEmpty(t, serviceID)
 
-	err = client.Peer.EstablishIntroPoint(serviceID, circID)
+	err = client.Peer.EstablishIntroPoint(serviceID, circID, time.Second)
 	require.NoError(t, err)
+	clientOuts := client.GetOuts()
+	require.Len(t, clientOuts, len(clientOutsBefore)+1)
 
 	time.Sleep(200 * time.Millisecond)
+
+	exitIns := exit.GetIns()
+	exitOuts := exit.GetOuts()
+	clientIns := client.GetIns()
+
+	require.Len(t, exitIns, len(exitOutsBefore)+1)
+	require.Len(t, exitOuts, len(exitInsBefore)+1)
+	require.Len(t, clientIns, len(clientInsBefore)+1)
 
 	// 1. Client-side intro point recording
 	introPoints := client.Peer.GetServiceIntroPoints(serviceID)
@@ -35,22 +49,34 @@ func Test_TOR_HS_EstablishIntroPoint_Basic(t *testing.T) {
 func Test_TOR_HS_EstablishIntroPoint_ServiceNotFound(t *testing.T) {
 	client, _, _, _, circID := Build3HopCircuit(t)
 
-	err := client.Peer.EstablishIntroPoint("nonexistent-service", circID)
+	err := client.Peer.EstablishIntroPoint("nonexistent-service", circID, time.Second)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "unknown serviceID")
+
+	clientIns := client.GetIns()
+	clientOuts := client.GetOuts()
+
+	require.Len(t, clientIns, len(clientIns))
+	require.Len(t, clientOuts, len(clientOuts))
 }
 
 // Test_TOR_HS_EstablishIntroPoint_UnknownCircuit_Error tests the case where the circuit ID is unknown.
 func Test_TOR_HS_EstablishIntroPoint_UnknownCircuit_Error(t *testing.T) {
 	client, _, _, _, _ := Build3HopCircuit(t)
 
-	serviceID, err := client.Peer.CreateHiddenService()
+	serviceID, err := client.Peer.GenerateHiddenServiceID()
 	require.NoError(t, err)
 
 	// invalid circuit ID
-	err = client.Peer.EstablishIntroPoint(serviceID, 9999)
+	err = client.Peer.EstablishIntroPoint(serviceID, 9999, time.Second)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "no crypto state")
+
+	clientIns := client.GetIns()
+	clientOuts := client.GetOuts()
+
+	require.Len(t, clientIns, len(clientIns))
+	require.Len(t, clientOuts, len(clientOuts))
 }
 
 // Test_TOR_HS_EstablishIntroPoint_Multiple tests establishing multiple introduction points for a hidden service.
@@ -107,15 +133,35 @@ func Test_TOR_HS_EstablishIntroPoint_Multiple(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Equal(t, 2, client.Peer.GetClientCircuitsNbr())
+	clientInsBefore := client.GetIns()
+	clientOutsBefore := client.GetOuts()
+	exit1InsBefore := exit1.GetIns()
+	exit1OutsBefore := exit1.GetOuts()
+	exit2InsBefore := exit2.GetIns()
+	exit2OutsBefore := exit2.GetOuts()
 
 	// One hidden service, multiple intro points
-	serviceID, err := client.Peer.CreateHiddenService()
+	serviceID, err := client.Peer.GenerateHiddenServiceID()
 	require.NoError(t, err)
 
-	require.NoError(t, client.Peer.EstablishIntroPoint(serviceID, circID1))
-	require.NoError(t, client.Peer.EstablishIntroPoint(serviceID, circID2))
+	require.NoError(t, client.Peer.EstablishIntroPoint(serviceID, circID1, time.Second))
+	require.NoError(t, client.Peer.EstablishIntroPoint(serviceID, circID2, time.Second))
 
 	time.Sleep(200 * time.Millisecond)
+
+	clientIns := client.GetIns()
+	clientOuts := client.GetOuts()
+	exit1Ins := exit1.GetIns()
+	exit1Outs := exit1.GetOuts()
+	exit2Ins := exit2.GetIns()
+	exit2Outs := exit2.GetOuts()
+
+	require.Len(t, clientOuts, len(clientOutsBefore)+2)
+	require.Len(t, clientIns, len(clientInsBefore)+2)
+	require.Len(t, exit1Ins, len(exit1InsBefore)+1)
+	require.Len(t, exit1Outs, len(exit1OutsBefore)+1)
+	require.Len(t, exit2Ins, len(exit2InsBefore)+1)
+	require.Len(t, exit2Outs, len(exit2OutsBefore)+1)
 
 	intros := client.Peer.GetServiceIntroPoints(serviceID)
 	require.Len(t, intros, 2)
@@ -132,7 +178,7 @@ func Test_TOR_HS_EstablishIntroPoint_Multiple(t *testing.T) {
 func Test_TOR_HS_DescriptorExpired(t *testing.T) {
 	client, _, _, _, _ := Build3HopCircuit(t)
 
-	serviceID, _ := client.Peer.CreateHiddenService()
+	serviceID, _ := client.Peer.GenerateHiddenServiceID()
 
 	// Build descriptor that expires immediately
 	err := client.Peer.BuildServiceDescriptor(serviceID, []string{"or1"}, 0)
@@ -148,7 +194,7 @@ func Test_TOR_HS_DescriptorExpired(t *testing.T) {
 func Test_TOR_HS_DescriptorPublish_AndLookup(t *testing.T) {
 	client, _, _, exit, _ := Build3HopCircuit(t)
 
-	serviceID, err := client.Peer.CreateHiddenService()
+	serviceID, err := client.Peer.GenerateHiddenServiceID()
 	require.NoError(t, err)
 
 	introORs := []string{"or1", "or2"}

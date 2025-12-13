@@ -89,7 +89,7 @@ type TorHiddenServices interface {
 
 	// EstablishIntroPoint establishes an intro point for a hidden service.
 	// It tells the exit OR on circID that it should act as an introduction point for Bob's hidden service.
-	EstablishIntroPoint(serviceID string, circID uint16) error
+	EstablishIntroPoint(serviceID string, circID uint16, timeout time.Duration) error
 
 	// BuildServiceDescriptor builds a service descriptor for a hidden service
 	// which is published to the Lookup service

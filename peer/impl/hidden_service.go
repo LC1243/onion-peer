@@ -66,7 +66,7 @@ func (n *node) GenerateHiddenServiceID() (string, error) {
 }
 
 // EstablishIntroPoint implements Tor.HiddenServices
-func (n *node) EstablishIntroPoint(serviceID string, circID uint16) error {
+func (n *node) EstablishIntroPoint(serviceID string, circID uint16, timeout time.Duration) error {
 	hs, ok := n.hiddenServices[serviceID]
 	if !ok {
 		return fmt.Errorf("unknown serviceID: %s", serviceID)
@@ -98,19 +98,49 @@ func (n *node) EstablishIntroPoint(serviceID string, circID uint16) error {
 		return err
 	}
 
-	// Send it via exit of this circuit
-	cc, ok := n.clientCircuits[circID]
+	_, ok = n.clientCircuits[circID]
 	if !ok {
 		return fmt.Errorf("not a client circuit %d", circID)
 	}
 
-	//TODO: Simplified, Bob can choose the OR that acts as a introduction point
-	hs.IntroPoints = append(hs.IntroPoints, IntroPoint{
-		RouterAddr: cc.Hops[2], // exit hop
-		CircID:     circID,
-	})
+	ch := make(chan struct{})
 
-	return n.SendCell(cc.Hops[0], cell)
+	n.introWaitMu.Lock()
+	n.introWait[circID] = ch
+	n.introWaitMu.Unlock()
+
+	return n.SendAndWaitForIntroReply(circID, serviceID, cell, timeout)
+}
+
+// SendAndWaitForIntroReply tries to create an Introduction Point and waits for the corresponding confirmation
+func (n *node) SendAndWaitForIntroReply(circID uint16, serviceID string, cell Cell, timeout time.Duration) error {
+	hs := n.hiddenServices[serviceID]
+	cc := n.clientCircuits[circID]
+
+	ch := make(chan struct{})
+
+	n.introWaitMu.Lock()
+	n.introWait[circID] = ch
+	n.introWaitMu.Unlock()
+
+	// Send it via guard of this circuit
+	err := n.SendCell(cc.Hops[0], cell)
+	if err != nil {
+		return err
+	}
+
+	select {
+	case <-ch:
+		//TODO: Simplified, Bob can choose the OR that acts as a introduction point
+		hs.IntroPoints = append(hs.IntroPoints, IntroPoint{
+			RouterAddr: cc.Hops[2],
+			CircID:     circID,
+		})
+		return nil
+
+	case <-time.After(timeout):
+		return fmt.Errorf("intro point establishment timed out on circ %d", circID)
+	}
 }
 
 // HandleRelayEstablishIntro provides the OR with Bob public key to identify his service
@@ -139,6 +169,56 @@ func (n *node) HandleRelayEstablishIntro(relay RelayCell, circ *Circuit) error {
 	n.introPointsMu.Lock()
 	n.introPoints[serviceID] = append(n.introPoints[serviceID], state)
 	n.introPointsMu.Unlock()
+	return n.SendRelayIntroEstablished(circ)
+}
+
+// SendRelayIntroEstablished sends an acknowledgment to Bob saying is ready to receive traffic
+func (n *node) SendRelayIntroEstablished(circ *Circuit) error {
+	cryptoStates := n.circuitCryptoStates[circ.InCircID]
+	exitIdx := len(cryptoStates) - 1
+	cryptoState := cryptoStates[exitIdx]
+
+	encrypted, digest, err := EncryptRelayPayload(
+		cryptoState,
+		DirectionBackward,
+		[]byte{}, // empty payload
+	)
+	if err != nil {
+		return err
+	}
+
+	relay := RelayCell{
+		CircID:   circ.InCircID,
+		StreamID: 0,
+		Command:  RelayIntroEstablished,
+		Digest:   digest,
+		Length:   uint16(len(encrypted)),
+		Data:     encrypted,
+	}
+
+	cell, err := n.EncodeRelayCell(relay)
+	if err != nil {
+		return err
+	}
+
+	return n.SendCell(circ.PrevHop, cell)
+}
+
+// HandleRelayIntroEstablished handles the ACK from the OR saying he's ready to receive traffic
+func (n *node) HandleRelayIntroEstablished(relay RelayCell) error {
+	n.introWaitMu.Lock()
+	ch := n.introWait[relay.CircID]
+	delete(n.introWait, relay.CircID)
+	n.introWaitMu.Unlock()
+
+	if ch != nil {
+		close(ch)
+	}
+
+	n.log.Info().
+		Uint16("circID", relay.CircID).
+		Msg("Introduction point established (ACK received)")
+
 	return nil
 }
 
@@ -268,7 +348,7 @@ func (n *node) CreateHiddenService(introPoints [][3]string,
 			return "", nil, fmt.Errorf("build circuit %d failed: %w", i, err)
 		}
 
-		err = n.EstablishIntroPoint(serviceID, circID)
+		err = n.EstablishIntroPoint(serviceID, circID, timeout)
 		if err != nil {
 			_ = n.DestroyCircuit(circID)
 			cleanup()
