@@ -52,8 +52,8 @@ func NewPeer(conf peer.Configuration) peer.Peer {
 	n.streamTables = make(map[uint16]*CircuitStreams)
 	n.congestionControl = true
 	// Initialize rate limiting token buckets
-	n.writeBucket = NewTokenBucket(DefaultRate, DefaultCapacity) // 100 KB/s with burst of 200 KB
-	n.readBucket = NewTokenBucket(DefaultRate, DefaultCapacity)  // 100 KB/s with burst of 200 KB
+	n.writeBucket = NewTokenBucket(DefaultRate, DefaultCapacity)
+	n.readBucket = NewTokenBucket(DefaultRate, DefaultCapacity)
 
 	// Initialize crypto state
 	n.peerOnionKeys = make(map[string]*rsa.PublicKey)
