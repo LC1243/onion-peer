@@ -12,7 +12,9 @@ import (
 
 // It is advised to define a constant (max) size for all relevant byte buffers, e.g:
 // const bufSize = 65000
-const bufSize = 65000
+// TOR : this buffer size should be bigger than the windows used in flow/congestion control
+// we'll take the cell size and multiply it by the window size
+const bufSize = 520 * 1000
 
 // NewUDP returns a new udp transport implementation.
 func NewUDP() transport.Transport {
@@ -39,6 +41,15 @@ func (n *UDP) CreateSocket(address string) (transport.ClosableSocket, error) {
 		return nil, err
 	}
 
+	//Change the buffer size to fit the windows used in flow/congestion control
+	err = conn.SetReadBuffer(bufSize)
+	if err != nil {
+		return nil, err
+	}
+	err = conn.SetWriteBuffer(bufSize)
+	if err != nil {
+		return nil, err
+	}
 	s := &Socket{
 		conn:   conn,
 		myAddr: conn.LocalAddr().String(),

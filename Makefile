@@ -5,6 +5,7 @@ export GORACE = halt_on_error=1
 export GNODES = 10
 # how many benchmark iterations to average on
 export BENCHTIME = "10x"
+export PEER_BIN_PATH = dummy
 
 all: lint vet test
 
@@ -20,7 +21,7 @@ test_unit_tor:
 	go test -timeout 5m -v -race -run Test_TOR ./peer/tests/unit
 
 test_int_tor:
-	@echo "No TOR integration tests yet"
+	go test -timeout 5m -v -race -run Test_TOR ./peer/tests/integration
 
 test_unit_hw0:
 	go test -timeout 2m -v -race -run Test_HW0 ./peer/tests/unit
