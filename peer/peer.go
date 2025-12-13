@@ -38,8 +38,7 @@ type Tor interface {
 	// RelayDestroyCircuit is called by a relay to destroy a circuit initiated
 	// by another peer. src is the address of the previous or next hop and allows
 	// the relay to identify which circuit to destroy.
-	RelayDestroyCircuit(circID uint16, src string) error
-
+	RelayDestroyCircuit(circuitID uint16, src string) error
 	// CleanupAllCircuits tears down all active circuits managed by the peer
 	CleanupAllCircuits()
 
@@ -51,6 +50,9 @@ type Tor interface {
 
 	// GetCircuitIDs returns all tracked circuit IDs (for testing)
 	GetCircuitIDs() []uint16
+
+	// SetCongestionControl enables or disables congestion control.
+	SetCongestionControl(enable bool)
 }
 
 // TorStreams defines the interface for Tor-like streams.

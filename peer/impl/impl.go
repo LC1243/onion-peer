@@ -21,10 +21,11 @@ import (
 func NewPeer(conf peer.Configuration) peer.Peer {
 	// Initialize the node with its configuration.
 	n := &node{
-		conf:    conf,
-		stopCh:  make(chan struct{}),
-		stopped: make(chan struct{}),
-		routing: map[string]string{},
+		conf:              conf,
+		stopCh:            make(chan struct{}),
+		stopped:           make(chan struct{}),
+		routing:           map[string]string{},
+		congestionControl: true,
 	}
 	// Configure logger: disabled if GLOG=="no", else enabled at info level to console
 	level := zerolog.InfoLevel
@@ -49,6 +50,7 @@ func NewPeer(conf peer.Configuration) peer.Peer {
 	n.circuits = make(map[circuitKey]*Circuit)
 	n.clientCircuits = make(map[uint16]*ClientCircuit)
 	n.streamTables = make(map[uint16]*CircuitStreams)
+	n.congestionControl = true
 
 	// Initialize crypto state
 	n.peerOnionKeys = make(map[string]*rsa.PublicKey)
@@ -129,6 +131,9 @@ type node struct {
 	// streamTables[circID] = CircuitStreams
 	streamsMu    sync.RWMutex
 	streamTables map[uint16]*CircuitStreams
+
+	// Congestion control toggle
+	congestionControl bool
 
 	// Cryptography for Tor-like onion routing
 	onionKey      *OnionKeyPair             // This node's long-term onion keypair
