@@ -410,7 +410,6 @@ func (n *node) HandleForwardRelay(cell Cell, circ *Circuit) error {
 	// Flow Control: Relays do not decrement the circuit window for cells that they are just relaying
 	// So we do NOT decrement PackageWindow here
 
-
 	// Recompute digest for the decrypted data
 	h := sha256.New()
 	h.Write(cryptoStates[0].ForwardDigest)
@@ -2197,7 +2196,8 @@ func (n *node) HandleRelayData(relay RelayCell, circ *Circuit) error {
 	n.circuitsMu.Unlock()
 
 	if shouldSend {
-		if err := n.sendRelaySendme(circ); err != nil {
+		err := n.sendRelaySendme(circ)
+		if err != nil {
 			n.log.Error().Err(err).Msg("Failed to send RELAY_SENDME")
 		}
 	}
@@ -2262,7 +2262,8 @@ func (n *node) HandleRelayDataAsOP(relay RelayCell, cc *ClientCircuit) error {
 	n.clientCircuitsMu.Unlock()
 
 	if shouldSend {
-		if err := n.sendRelaySendmeAsOP(cc); err != nil {
+		err := n.sendRelaySendmeAsOP(cc)
+		if err != nil {
 			n.log.Error().Err(err).Msg("Failed to send RELAY_SENDME")
 		}
 	}
