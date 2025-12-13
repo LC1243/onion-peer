@@ -45,8 +45,8 @@ var (
 	hsRegistry   = make(map[string]*ServiceDescriptor)
 )
 
-// CreateHiddenService implements peer.TorHiddenServices
-func (n *node) CreateHiddenService() (string, error) {
+// GenerateHiddenServiceID implements peer.TorHiddenServices
+func (n *node) GenerateHiddenServiceID() (string, error) {
 	key, err := GenerateOnionKeyPair()
 	if err != nil {
 		return "", err
@@ -98,7 +98,7 @@ func (n *node) EstablishIntroPoint(serviceID string, circID uint16) error {
 		return err
 	}
 
-	// Send it via guard of this circuit
+	// Send it via exit of this circuit
 	cc, ok := n.clientCircuits[circID]
 	if !ok {
 		return fmt.Errorf("not a client circuit %d", circID)
@@ -235,4 +235,61 @@ func (n *node) GetIntroPointStateCount(serviceID string) int {
 	defer n.introPointsMu.Unlock()
 	list := n.introPoints[serviceID]
 	return len(list)
+}
+
+func (n *node) CreateHiddenService(introPoints [][3]string,
+	timeout time.Duration,
+	lifetime time.Duration) (string, []uint16, error) {
+
+	if len(introPoints) == 0 {
+		return "", nil, fmt.Errorf("at least one intro path is required")
+	}
+
+	// Create Hidden Service Locally
+	serviceID, err := n.GenerateHiddenServiceID()
+	if err != nil {
+		return "", nil, err
+	}
+
+	circuits := make([]uint16, 0, len(introPoints))
+	// auxiliar function to destroy circuits on error
+	cleanup := func() {
+		for _, cid := range circuits {
+			_ = n.DestroyCircuit(cid)
+		}
+	}
+
+	// Build circuits and establish intro points
+	for i, hops := range introPoints {
+		circID, err := n.BuildCircuit(hops, timeout)
+
+		if err != nil {
+			cleanup()
+			return "", nil, fmt.Errorf("build circuit %d failed: %w", i, err)
+		}
+
+		err = n.EstablishIntroPoint(serviceID, circID)
+		if err != nil {
+			_ = n.DestroyCircuit(circID)
+			cleanup()
+			return "", nil, fmt.Errorf("establish intro point on circuit %d failed: %w", circID, err)
+		}
+
+		circuits = append(circuits, circID)
+	}
+
+	// Publish descriptor
+	introORs := n.GetServiceIntroPoints(serviceID)
+	err = n.BuildServiceDescriptor(serviceID, introORs, lifetime)
+	if err != nil {
+		cleanup()
+		return "", nil, err
+	}
+
+	n.log.Info().
+		Str("serviceID", serviceID).
+		Int("introPoints", len(introORs)).
+		Msg("Hidden service created with explicit circuits")
+
+	return serviceID, circuits, nil
 }

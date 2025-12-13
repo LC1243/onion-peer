@@ -84,8 +84,8 @@ type TorStreams interface {
 }
 
 type TorHiddenServices interface {
-	// CreateHiddenService creates a hidden service and returns its serviceID
-	CreateHiddenService() (string, error)
+	// GenerateHiddenServiceID creates a hidden service locally and returns its serviceID
+	GenerateHiddenServiceID() (string, error)
 
 	// EstablishIntroPoint establishes an intro point for a hidden service.
 	// It tells the exit OR on circID that it should act as an introduction point for Bob's hidden service.
