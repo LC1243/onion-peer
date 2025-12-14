@@ -50,6 +50,11 @@ const (
 	RelayHSDirReply       = 19
 )
 
+// CookieSize Cookie size in bytes for rendezvous points
+const (
+	CookieSize = 20
+)
+
 type Cell struct {
 	CircID  uint16
 	Command uint8
