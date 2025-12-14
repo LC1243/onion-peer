@@ -2258,10 +2258,11 @@ func (n *node) HandleRelayData(relay RelayCell, circ *Circuit) error {
 		}
 		n.circuitsMu.Unlock()
 
-	if shouldSend {
-		err := n.sendRelaySendmeStream(circ, 0)
-		if err != nil {
-			n.log.Error().Err(err).Msg("Failed to send RELAY_SENDME")
+		if shouldSend {
+			err := n.sendRelaySendmeStream(circ, 0)
+			if err != nil {
+				n.log.Error().Err(err).Msg("Failed to send RELAY_SENDME")
+			}
 		}
 	}
 
@@ -2359,10 +2360,11 @@ func (n *node) HandleRelayDataAsOP(relay RelayCell, cc *ClientCircuit) error {
 		}
 		n.clientCircuitsMu.Unlock()
 
-	if shouldSend {
-		err := n.sendRelaySendmeStreamAsOP(cc, 0)
-		if err != nil {
-			n.log.Error().Err(err).Msg("Failed to send RELAY_SENDME")
+		if shouldSend {
+			err := n.sendRelaySendmeStreamAsOP(cc, 0)
+			if err != nil {
+				n.log.Error().Err(err).Msg("Failed to send RELAY_SENDME")
+			}
 		}
 	}
 
