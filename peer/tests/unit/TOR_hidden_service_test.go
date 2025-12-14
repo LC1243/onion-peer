@@ -120,7 +120,7 @@ func Test_TOR_HS_Establish_IntroPoint_Multiple(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Populate onion keys for all nodes
-	populateOnionKeys(nodes)
+	z.PopulateOnionKeys(nodes)
 
 	// Build two circuits on the SAME client, but with different exits
 	hops1 := [3]string{guard1.GetAddr(), middle1.GetAddr(), exit1.GetAddr()}
@@ -236,7 +236,7 @@ func Test_TOR_HS_Descriptor_Publish_AndLookup(t *testing.T) {
 	}
 
 	time.Sleep(100 * time.Millisecond)
-	populateOnionKeys(nodes)
+	z.PopulateOnionKeys(nodes)
 
 	// Publisher circuit
 	publishCircID, err := client.Peer.BuildCircuit(
@@ -307,7 +307,7 @@ func Test_TOR_HS_Create_HiddenService_Basic(t *testing.T) {
 	}
 
 	time.Sleep(100 * time.Millisecond)
-	populateOnionKeys(nodes)
+	z.PopulateOnionKeys(nodes)
 
 	hops := [][3]string{
 		{guard.GetAddr(), middle.GetAddr(), exit.GetAddr()},
@@ -386,7 +386,7 @@ func Test_TOR_HS_Create_HiddenService_MultipleIntroPoints(t *testing.T) {
 	}
 
 	time.Sleep(100 * time.Millisecond)
-	populateOnionKeys(nodes)
+	z.PopulateOnionKeys(nodes)
 
 	introPaths := [][3]string{
 		{guard1.GetAddr(), middle1.GetAddr(), exit1.GetAddr()},
@@ -460,7 +460,7 @@ func Test_TOR_HS_Delete_HiddenService_Basic(t *testing.T) {
 	}
 
 	time.Sleep(100 * time.Millisecond)
-	populateOnionKeys(nodes)
+	z.PopulateOnionKeys(nodes)
 
 	exit.SetPeerAsHSDir(true)
 
@@ -518,7 +518,7 @@ func Test_TOR_HS_Delete_HiddenService_MultipleIntroPoints(t *testing.T) {
 	}
 
 	time.Sleep(100 * time.Millisecond)
-	populateOnionKeys(nodes)
+	z.PopulateOnionKeys(nodes)
 
 	exit1.SetPeerAsHSDir(true)
 	exit2.SetPeerAsHSDir(true)

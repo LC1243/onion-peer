@@ -285,6 +285,8 @@ func (n *node) HandleRelayAsOP(cell Cell, src string, cc *ClientCircuit) error {
 		return n.HandleRelaySendmeAsOP(relayCell, cc)
 	case RelayIntroEstablished:
 		return n.HandleRelayIntroEstablished(relayCell)
+	case RelayHSDirReply:
+		return n.HandleRelayHSDirReply(relayCell)
 	default:
 		return fmt.Errorf("unexpected relay command %d for client circuit", relayCell.Command)
 	}
@@ -416,29 +418,7 @@ func (n *node) HandleForwardRelay(cell Cell, circ *Circuit) error {
 		// We are the end of the circuit, process the relay command
 		// Replace the encrypted Data with decrypted plaintext
 		relayCell.Data = decryptedData
-
-		switch relayCell.Command {
-		case RelayBegin:
-			return n.HandleRelayBegin(relayCell, circ)
-		case RelayEnd:
-			return n.HandleRelayEnd(relayCell, circ)
-		case RelayExtend:
-			return n.HandleRelayExtend(relayCell, circ)
-		case RelayExtended:
-			return n.HandleRelayExtended(relayCell, circ)
-		case RelayData:
-			return n.HandleRelayData(relayCell, circ)
-		case RelaySendme:
-			return n.HandleRelaySendme(relayCell, circ)
-		case RelayIntroduce1:
-			return nil
-		case RelayEstablishIntro:
-			return n.HandleRelayEstablishIntro(relayCell, circ)
-		case RelayRendezvous1:
-			return nil
-		default:
-			return fmt.Errorf("unknown relay command %d", relayCell.Command)
-		}
+		return n.HandleRelayAtEndpoint(relayCell, circ)
 	}
 
 	n.log.Info().
@@ -469,6 +449,36 @@ func (n *node) HandleForwardRelay(cell Cell, circ *Circuit) error {
 		return err
 	}
 	return n.SendCell(circ.NextHop, forwardCell)
+}
+
+// HandleRelayAtEndpoint is the switch case of HandleForwardRelay
+func (n *node) HandleRelayAtEndpoint(relayCell RelayCell, circ *Circuit) error {
+	switch relayCell.Command {
+	case RelayBegin:
+		return n.HandleRelayBegin(relayCell, circ)
+	case RelayEnd:
+		return n.HandleRelayEnd(relayCell, circ)
+	case RelayExtend:
+		return n.HandleRelayExtend(relayCell, circ)
+	case RelayExtended:
+		return n.HandleRelayExtended(relayCell, circ)
+	case RelayData:
+		return n.HandleRelayData(relayCell, circ)
+	case RelaySendme:
+		return n.HandleRelaySendme(relayCell, circ)
+	case RelayIntroduce1:
+		return nil
+	case RelayEstablishIntro:
+		return n.HandleRelayEstablishIntro(relayCell, circ)
+	case RelayRendezvous1:
+		return nil
+	case RelayHSDirPublish:
+		return n.HandleRelayHSDirPublish(relayCell, circ)
+	case RelayHSDirLookup:
+		return n.HandleRelayHSDirLookup(relayCell, circ)
+	default:
+		return fmt.Errorf("unknown relay command %d", relayCell.Command)
+	}
 }
 
 // HandleBackwardRelay handles a relay cell going backward (NextHop -> PrevHop)
