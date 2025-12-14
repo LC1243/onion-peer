@@ -7,8 +7,8 @@ import (
 	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
+	"encoding/binary"
 	"fmt"
-	"sync"
 	"time"
 )
 
@@ -39,11 +39,6 @@ type ServiceDescriptor struct {
 	ExpiresAt     time.Time
 	Signature     []byte // DS(ServiceID || ExpiresAt || IntroPoints || ServicePubKey)
 }
-
-var (
-	hsRegistryMu sync.RWMutex
-	hsRegistry   = make(map[string]*ServiceDescriptor)
-)
 
 // GenerateHiddenServiceID implements peer.TorHiddenServices
 func (n *node) GenerateHiddenServiceID() (string, error) {
@@ -222,11 +217,338 @@ func (n *node) HandleRelayIntroEstablished(relay RelayCell) error {
 	return nil
 }
 
+// ----------------------------
+// For Lookup services
+// ----------------------------
+
+// SetPeerAsHSDir sets the flag to indicate if the peer should act as a lookup server
+func (n *node) SetPeerAsHSDir(value bool) {
+	n.IsHiddenServiceDir = value
+}
+
+// EncodeServiceDescriptor encodes a service descriptor into a relay payload
+func EncodeServiceDescriptor(desc *ServiceDescriptor) ([]byte, error) {
+	buf := bytes.NewBuffer(nil)
+
+	// ServiceID
+	sid := []byte(desc.ServiceID)
+	err := binary.Write(buf, binary.BigEndian, uint16(len(sid)))
+	if err != nil {
+		return nil, err
+	}
+
+	_, err = buf.Write(sid)
+	if err != nil {
+		return nil, err
+	}
+
+	// Public key
+	err = binary.Write(buf, binary.BigEndian, uint16(len(desc.ServicePubKey)))
+	if err != nil {
+		return nil, err
+	}
+
+	_, err = buf.Write(desc.ServicePubKey)
+	if err != nil {
+		return nil, err
+	}
+
+	// Introduction points
+	if len(desc.IntroPoints) > 255 {
+		return nil, fmt.Errorf("too many intro points")
+	}
+	buf.WriteByte(byte(len(desc.IntroPoints)))
+
+	for _, ip := range desc.IntroPoints {
+		ipb := []byte(ip)
+		if len(ipb) > 255 {
+			return nil, fmt.Errorf("intro point address too long")
+		}
+		buf.WriteByte(byte(len(ipb)))
+		_, err = buf.Write(ipb)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	// Expiration
+	expires := desc.ExpiresAt.Unix()
+	err = binary.Write(buf, binary.BigEndian, expires)
+	if err != nil {
+		return nil, err
+	}
+
+	// Signature
+	err = binary.Write(buf, binary.BigEndian, uint16(len(desc.Signature)))
+	if err != nil {
+		return nil, err
+	}
+
+	_, err = buf.Write(desc.Signature)
+	if err != nil {
+		return nil, err
+	}
+
+	if buf.Len() > RelayPayloadLen {
+		return nil, fmt.Errorf("service descriptor too large (%d bytes)", buf.Len())
+	}
+
+	return buf.Bytes(), nil
+}
+
+// DecodeServiceDescriptor decodes a relay payload into a service descriptor
+func DecodeServiceDescriptor(b []byte) (*ServiceDescriptor, error) {
+	r := bytes.NewReader(b)
+	desc := &ServiceDescriptor{}
+
+	// ServiceID
+	var sidLen uint16
+	err := binary.Read(r, binary.BigEndian, &sidLen)
+	if err != nil {
+		return nil, err
+	}
+
+	sid := make([]byte, sidLen)
+	_, err = r.Read(sid)
+	if err != nil {
+		return nil, err
+	}
+	desc.ServiceID = string(sid)
+
+	// Public key
+	var pkLen uint16
+	err = binary.Read(r, binary.BigEndian, &pkLen)
+	if err != nil {
+		return nil, err
+	}
+	pk := make([]byte, pkLen)
+	_, err = r.Read(pk)
+	if err != nil {
+		return nil, err
+	}
+	desc.ServicePubKey = pk
+
+	// Introduction points
+	count, err := r.ReadByte()
+	if err != nil {
+		return nil, err
+	}
+
+	desc.IntroPoints = make([]string, 0, count)
+	for i := 0; i < int(count); i++ {
+		l, err := r.ReadByte()
+		if err != nil {
+			return nil, err
+		}
+
+		addr := make([]byte, l)
+		_, err = r.Read(addr)
+		if err != nil {
+			return nil, err
+		}
+		desc.IntroPoints = append(desc.IntroPoints, string(addr))
+	}
+
+	// Expiration
+	var expires int64
+	err = binary.Read(r, binary.BigEndian, &expires)
+	if err != nil {
+		return nil, err
+	}
+	desc.ExpiresAt = time.Unix(expires, 0)
+
+	// Signature
+	var sigLen uint16
+	err = binary.Read(r, binary.BigEndian, &sigLen)
+	if err != nil {
+		return nil, err
+	}
+	sig := make([]byte, sigLen)
+
+	_, err = r.Read(sig)
+	if err != nil {
+		return nil, err
+	}
+	desc.Signature = sig
+
+	return desc, nil
+}
+
+func (n *node) HandleRelayHSDirPublish(relay RelayCell, circ *Circuit) error {
+	if !n.IsHiddenServiceDir {
+		return nil // ignore
+	}
+
+	desc, err := DecodeServiceDescriptor(relay.Data)
+	if err != nil {
+		return err
+	}
+
+	n.hsDirMu.Lock()
+	n.hsDirStore[desc.ServiceID] = desc
+	n.hsDirMu.Unlock()
+
+	return n.SendHSDirReply(circ, nil)
+}
+
+func (n *node) HandleRelayHSDirLookup(relay RelayCell, circ *Circuit) error {
+	if !n.IsHiddenServiceDir {
+		return n.SendHSDirReply(circ, nil)
+	}
+
+	serviceID := string(relay.Data)
+
+	n.hsDirMu.RLock()
+	desc := n.hsDirStore[serviceID]
+	n.hsDirMu.RUnlock()
+
+	if desc == nil || time.Now().After(desc.ExpiresAt) {
+		return n.SendHSDirReply(circ, nil)
+	}
+
+	payload, err := EncodeServiceDescriptor(desc)
+	if err != nil {
+		return err
+	}
+
+	return n.SendHSDirReply(circ, payload)
+}
+
+func (n *node) SendHSDirReply(circ *Circuit, payload []byte) error {
+	exitIdx := len(n.circuitCryptoStates[circ.InCircID]) - 1
+	cryptoState := n.circuitCryptoStates[circ.InCircID][exitIdx]
+
+	encrypted, digest, err := EncryptRelayPayload(cryptoState, DirectionBackward, payload)
+	if err != nil {
+		return err
+	}
+
+	relay := RelayCell{
+		CircID:   circ.InCircID,
+		StreamID: 0,
+		Command:  RelayHSDirReply,
+		Digest:   digest,
+		Length:   uint16(len(encrypted)),
+		Data:     encrypted,
+	}
+	cell, err := n.EncodeRelayCell(relay)
+	if err != nil {
+		return err
+	}
+	return n.SendCell(circ.PrevHop, cell)
+}
+
+func (n *node) PublishDescriptorToHSDir(desc *ServiceDescriptor, circID uint16, timeout time.Duration) error {
+	payload, err := EncodeServiceDescriptor(desc)
+	if err != nil {
+		return err
+	}
+
+	cryptoStates := n.circuitCryptoStates[circID]
+	encrypted, digest, err := EncryptRelayCellThroughCircuit(cryptoStates, payload)
+	if err != nil {
+		return err
+	}
+
+	relay := RelayCell{
+		CircID: circID, StreamID: 0,
+		Command: RelayHSDirPublish,
+		Digest:  digest, Length: uint16(len(encrypted)),
+		Data: encrypted,
+	}
+	cell, err := n.EncodeRelayCell(relay)
+	if err != nil {
+		return err
+	}
+
+	cc := n.clientCircuits[circID]
+	return n.SendCell(cc.Hops[0], cell)
+}
+
+func (n *node) LookupDescriptorViaHSDir(circID uint16, serviceID string, timeout time.Duration,
+) (*ServiceDescriptor, error) {
+
+	cc, ok := n.clientCircuits[circID]
+	if !ok {
+		return nil, fmt.Errorf("not a client circuit %d", circID)
+	}
+
+	cryptoStates := n.circuitCryptoStates[circID]
+	if len(cryptoStates) == 0 {
+		return nil, fmt.Errorf("no crypto states for circuit %d", circID)
+	}
+
+	encrypted, digest, err := EncryptRelayCellThroughCircuit(
+		cryptoStates,
+		[]byte(serviceID),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	relay := RelayCell{
+		CircID:   circID,
+		StreamID: 0,
+		Command:  RelayHSDirLookup,
+		Digest:   digest,
+		Length:   uint16(len(encrypted)),
+		Data:     encrypted,
+	}
+
+	cell, err := n.EncodeRelayCell(relay)
+	if err != nil {
+		return nil, err
+	}
+
+	replyCh := make(chan *ServiceDescriptor, 1)
+
+	n.hsdirWaitMu.Lock()
+	n.hsdirWait[circID] = replyCh
+	n.hsdirWaitMu.Unlock()
+
+	err = n.SendCell(cc.Hops[0], cell)
+	if err != nil {
+		return nil, err
+	}
+
+	select {
+	case desc := <-replyCh:
+		return desc, nil
+	case <-time.After(timeout):
+		return nil, fmt.Errorf("HSDir lookup timed out")
+	}
+}
+
+func (n *node) HandleRelayHSDirReply(relay RelayCell) error {
+	n.hsdirWaitMu.Lock()
+	ch := n.hsdirWait[relay.CircID]
+	delete(n.hsdirWait, relay.CircID)
+	n.hsdirWaitMu.Unlock()
+
+	if ch == nil {
+		return nil
+	}
+
+	if len(relay.Data) == 0 {
+		ch <- nil
+		return nil
+	}
+
+	desc, err := DecodeServiceDescriptor(relay.Data)
+	if err != nil {
+		return err
+	}
+
+	// TODO: VerifyServiceDescriptor(desc)
+	ch <- desc
+	return nil
+}
+
 // BuildServiceDescriptor implements peer.TorHiddenServices
-func (n *node) BuildServiceDescriptor(serviceID string, introORs []string, lifetime time.Duration) error {
+func (n *node) BuildServiceDescriptor(serviceID string, introORs []string, lifetime time.Duration) ServiceDescriptor {
 	hs, ok := n.hiddenServices[serviceID]
 	if !ok {
-		return fmt.Errorf("unknown serviceID %s", serviceID)
+		return ServiceDescriptor{}
 	}
 
 	pubBytes := x509.MarshalPKCS1PublicKey(hs.KeyPair.Public)
@@ -253,33 +575,11 @@ func (n *node) BuildServiceDescriptor(serviceID string, introORs []string, lifet
 	hash := sha256.Sum256(buf.Bytes())
 	sig, err := rsa.SignPKCS1v15(rand.Reader, hs.KeyPair.Private, crypto.SHA256, hash[:])
 	if err != nil {
-		return fmt.Errorf("sign service descriptor: %w", err)
+		return ServiceDescriptor{}
 	}
 	desc.Signature = sig
 
-	PublishServiceDescriptor(desc)
-	return nil
-}
-
-// PublishServiceDescriptor registers a service descriptor for the Lookup service
-func PublishServiceDescriptor(desc *ServiceDescriptor) {
-	hsRegistryMu.Lock()
-	hsRegistry[desc.ServiceID] = desc
-	hsRegistryMu.Unlock()
-}
-
-// LookupServiceDescriptor returns a service descriptor if it exists and hasn't expired yet
-func LookupServiceDescriptor(serviceID string) (*ServiceDescriptor, bool) {
-	hsRegistryMu.RLock()
-	defer hsRegistryMu.RUnlock()
-	desc, ok := hsRegistry[serviceID]
-	if !ok {
-		return nil, false
-	}
-	if time.Now().After(desc.ExpiresAt) {
-		return nil, false
-	}
-	return desc, true
+	return *desc
 }
 
 // GetServiceIntroPoints implements peer.TorHiddenServices
@@ -298,15 +598,6 @@ func (n *node) GetServiceIntroPoints(serviceID string) []string {
 // GetIntroPointCount implements peer.TorHiddenServices
 func (n *node) GetIntroPointCount(serviceID string) int {
 	return len(n.hiddenServices[serviceID].IntroPoints)
-}
-
-// LookupDescriptor implements peer.TorHiddenServices
-func (n *node) LookupDescriptor(serviceID string) (bool, []string) {
-	desc, ok := LookupServiceDescriptor(serviceID)
-	if !ok {
-		return false, nil
-	}
-	return true, append([]string(nil), desc.IntroPoints...)
 }
 
 // GetIntroPointStateCount implements peer.TorHiddenServices
@@ -360,10 +651,17 @@ func (n *node) CreateHiddenService(introPoints [][3]string,
 
 	// Publish descriptor
 	introORs := n.GetServiceIntroPoints(serviceID)
-	err = n.BuildServiceDescriptor(serviceID, introORs, lifetime)
+	serviceDesc := n.BuildServiceDescriptor(serviceID, introORs, lifetime) //FIXME
+
+	if serviceDesc.ServiceID == "" {
+		cleanup()
+		return "", nil, fmt.Errorf("failed to build service descriptor")
+	}
+
+	err = n.PublishDescriptorToHSDir(&serviceDesc, circuits[0], timeout)
 	if err != nil {
 		cleanup()
-		return "", nil, err
+		return "", nil, fmt.Errorf("publish descriptor failed: %w", err)
 	}
 
 	n.log.Info().

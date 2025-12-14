@@ -29,23 +29,25 @@ const (
 
 // Relay Commands
 const (
-	RelayData      = 1
-	RelayBegin     = 2
-	RelayEnd       = 3
-	RelayTeardown  = 4
-	RelayConnected = 5
-	RelayExtend    = 6
-	RelayExtended  = 7
-	RelayTruncate  = 8
-	RelayTruncated = 9
-	RelaySendme    = 10
-	RelayDrop      = 11
-	// new messages for hidden services
+	RelayData             = 1
+	RelayBegin            = 2
+	RelayEnd              = 3
+	RelayTeardown         = 4
+	RelayConnected        = 5
+	RelayExtend           = 6
+	RelayExtended         = 7
+	RelayTruncate         = 8
+	RelayTruncated        = 9
+	RelaySendme           = 10
+	RelayDrop             = 11
 	RelayEstablishIntro   = 12 // Bob -> OR
 	RelayIntroEstablished = 13 // NEW: OR -> Bob (ACK)
 	RelayIntroduce1       = 14 // Alice -> Intro Point (intro message)
 	RelayRendezvous1      = 15 // Bob -> RP (cookie + DH half + H(K))
 	RelayEstablishRP      = 16 // Alice -> RP (associate cookie with her circuit)
+	RelayHSDirPublish     = 17
+	RelayHSDirLookup      = 18
+	RelayHSDirReply       = 19
 )
 
 type Cell struct {
