@@ -174,10 +174,6 @@ func (n *node) Start() error {
 	n.wg.Add(1)
 	go n.listenLoop()
 
-	// Launch the processing loop
-	n.wg.Add(1)
-	go n.processLoop()
-
 	// Start anti-entropy loop if configured
 	if n.conf.AntiEntropyInterval > 0 {
 		n.wg.Add(1)
@@ -204,6 +200,7 @@ func (n *node) Start() error {
 // listenLoop receives packets from the socket and dispatches them.
 func (n *node) listenLoop() {
 	defer n.wg.Done()
+	defer close(n.stopped)
 	defer close(n.packetCh)
 
 	for {
@@ -226,20 +223,6 @@ func (n *node) listenLoop() {
 			continue
 		}
 
-		select {
-		case n.packetCh <- pkt:
-		case <-n.stopCh:
-			return
-		}
-	}
-}
-
-// processLoop processes packets from the channel with rate limiting.
-func (n *node) processLoop() {
-	defer n.wg.Done()
-	defer close(n.stopped)
-
-	for pkt := range n.packetCh {
 		// Rate limiting
 		if n.congestionControl {
 			size := CellSize
@@ -252,6 +235,7 @@ func (n *node) processLoop() {
 				time.Sleep(wait)
 			}
 		}
+
 		n.handlePacket(pkt)
 	}
 }
