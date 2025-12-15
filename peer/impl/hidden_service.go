@@ -965,3 +965,17 @@ func (n *node) SendRelayEstablishRP(circID uint16, cookie [CookieSize]byte) erro
 
 	return n.SendCell(cc.Hops[0], cell)
 }
+
+// HandleRelayRPEstablished handles the ACK from the OR confirming the rendezvous point establishment
+func (n *node) HandleRelayRPEstablished(relay RelayCell) error {
+	n.cookieAckMu.Lock()
+	ackCh := n.cookieAck[relay.CircID]
+	delete(n.cookieAck, relay.CircID)
+	n.cookieAckMu.Unlock()
+
+	if ackCh == nil {
+		return nil // no one is waiting for this ACK, ignore
+	}
+	close(ackCh)
+	return nil
+}
