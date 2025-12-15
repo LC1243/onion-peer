@@ -2,7 +2,7 @@ name: Tor Tests
 
 on:
   push:
-    branches: [main, circuit-creation, feat-streams]
+    branches: [main, circuit-creation, feat-streams, feat-hidden-services-part1]
   pull_request:
     branches: [main, feat-streams]
 
