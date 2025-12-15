@@ -97,8 +97,9 @@ type TorHiddenServices interface {
 
 	// PrepareRendezvousPoint prepares a rendezvous point on the given circID for a given serviceID.
 	// It returns the cookie that the client will send to the hidden service to connect at the RP.
+	// Cookie size is set manually to do not create cyclic import dependencies.
 	PrepareRendezvousPoint(serviceID, circID uint16,
-		timeout time.Duration) (cookie []byte, err error)
+		timeout time.Duration) (cookie [20]byte, err error)
 
 	// GetServiceIntroPoints returns the intro points for a hidden service
 	GetServiceIntroPoints(serviceID string) []string
