@@ -1005,3 +1005,35 @@ func (n *node) SendRPEstablished(circ *Circuit) error {
 	}
 	return n.SendCell(circ.PrevHop, cell)
 }
+
+// HandleRelayEstablishRP handles the establishment of a rendezvous point by storing the cookie
+func (n *node) HandleRelayEstablishRP(relay RelayCell, circ *Circuit) error {
+	if relay.Length != CookieSize {
+		return fmt.Errorf("invalid rendezvous cookie size: %d", relay.Length)
+	}
+
+	cookie := string(relay.Data[:CookieSize])
+	n.rendezvousEntryMu.Lock()
+	_, exist := n.rendezvousEntries[cookie]
+	if exist {
+		n.rendezvousEntryMu.Unlock()
+		return nil // cookie already exists, ignore it
+	}
+	n.rendezvousEntries[cookie] = relay.CircID
+	n.rendezvousEntryMu.Unlock()
+
+	err := n.SendRPEstablished(circ)
+	if err != nil {
+		n.rendezvousEntryMu.Lock()
+		delete(n.rendezvousEntries, cookie) // rollback the stored cookie
+		n.rendezvousEntryMu.Unlock()
+		return fmt.Errorf("failed to send RP established ACK: %w", err)
+	}
+
+	n.log.Info().
+		Uint16("circID", circ.InCircID).
+		Str("cookie", fmt.Sprintf("%x", cookie)).
+		Msg("Rendezvous point established and ACK sent")
+
+	return nil
+}
