@@ -66,6 +66,13 @@ func NewPeer(conf peer.Configuration) peer.Peer {
 	n.diffieHellmanHandshakePairs = make(map[uint16]*DiffieHellmanHandshakePairs)
 	n.circuitCryptoStates = make(map[uint16][]*CircuitCryptoState)
 
+	n.serviceKeys = make(map[string]*OnionKeyPair)
+	n.hiddenServices = make(map[string]*HiddenService)
+	n.introPoints = make(map[string][]*IntroPointState)
+	n.introWait = make(map[uint16]chan struct{})
+	n.hsDirStore = make(map[string]*ServiceDescriptor)
+	n.hsdirWait = make(map[uint16]chan *ServiceDescriptor)
+
 	// Generate onion keypair for this node
 	// Note: In production, this should be loaded from persistent storage
 	// For now, we generate a new keypair each time
@@ -165,6 +172,25 @@ type node struct {
 
 	// Fairness Scheduler
 	scheduler *CircuitScheduler
+
+	serviceKeys    map[string]*OnionKeyPair
+	hiddenServices map[string]*HiddenService
+
+	introPoints   map[string][]*IntroPointState // serviceID -> state
+	introPointsMu sync.RWMutex
+
+	introWaitMu sync.Mutex
+	introWait   map[uint16]chan struct{} // circID -> done
+
+	// IsHiddenServiceDir indicates whether the peer acts as a directory for hidden services
+	// so that multiple peers can look up for services.
+	// Default: false
+	IsHiddenServiceDir bool
+	// In case a node acts as a hidden service directory
+	hsDirStore  map[string]*ServiceDescriptor
+	hsDirMu     sync.RWMutex
+	hsdirWaitMu sync.Mutex
+	hsdirWait   map[uint16]chan *ServiceDescriptor
 }
 
 // Start implements peer.Service
@@ -181,10 +207,6 @@ func (n *node) Start() error {
 	// Launch the listening loop in a background goroutine so Start returns quickly.
 	n.wg.Add(1)
 	go n.listenLoop()
-
-	// Launch the processing loop
-	n.wg.Add(1)
-	go n.processLoop()
 
 	// Start scheduler
 	n.scheduler.Start()
@@ -215,6 +237,7 @@ func (n *node) Start() error {
 // listenLoop receives packets from the socket and dispatches them.
 func (n *node) listenLoop() {
 	defer n.wg.Done()
+	defer close(n.stopped)
 	defer close(n.packetCh)
 
 	for {
@@ -237,20 +260,6 @@ func (n *node) listenLoop() {
 			continue
 		}
 
-		select {
-		case n.packetCh <- pkt:
-		case <-n.stopCh:
-			return
-		}
-	}
-}
-
-// processLoop processes packets from the channel with rate limiting.
-func (n *node) processLoop() {
-	defer n.wg.Done()
-	defer close(n.stopped)
-
-	for pkt := range n.packetCh {
 		// Rate limiting
 		if n.congestionControl {
 			size := CellSize
@@ -263,6 +272,7 @@ func (n *node) processLoop() {
 				time.Sleep(wait)
 			}
 		}
+
 		n.handlePacket(pkt)
 	}
 }
