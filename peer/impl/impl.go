@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -21,13 +22,14 @@ import (
 func NewPeer(conf peer.Configuration) peer.Peer {
 	// Initialize the node with its configuration.
 	n := &node{
-		conf:              conf,
-		stopCh:            make(chan struct{}),
-		stopped:           make(chan struct{}),
-		routing:           map[string]string{},
-		congestionControl: true,
-		packetCh:          make(chan transport.Packet, 2000),
+		conf:     conf,
+		stopCh:   make(chan struct{}),
+		stopped:  make(chan struct{}),
+		routing:  map[string]string{},
+		packetCh: make(chan transport.Packet, 2000),
 	}
+	// Set congestion control default (atomic)
+	n.congestionControl.Store(true)
 	// Configure logger: disabled if GLOG=="no", else enabled at info level to console
 	level := zerolog.InfoLevel
 	if os.Getenv("GLOG") == "no" {
@@ -53,7 +55,6 @@ func NewPeer(conf peer.Configuration) peer.Peer {
 	n.circuits = make(map[circuitKey]*Circuit)
 	n.clientCircuits = make(map[uint16]*ClientCircuit)
 	n.streamTables = make(map[uint16]*CircuitStreams)
-	n.congestionControl = true
 	// Initialize rate limiting token buckets
 	n.writeBucket = NewTokenBucket(DefaultRate, DefaultCapacity)
 	n.readBucket = NewTokenBucket(DefaultRate, DefaultCapacity)
@@ -148,8 +149,8 @@ type node struct {
 	streamsMu    sync.RWMutex
 	streamTables map[uint16]*CircuitStreams
 
-	// Congestion control toggle
-	congestionControl bool
+	// Congestion control toggle (atomic for thread-safety)
+	congestionControl atomic.Bool
 
 	// Cryptography for Tor-like onion routing
 	onionKey      *OnionKeyPair             // This node's long-term onion keypair
@@ -261,7 +262,7 @@ func (n *node) listenLoop() {
 		}
 
 		// Rate limiting
-		if n.congestionControl {
+		if n.congestionControl.Load() {
 			size := CellSize
 			wait := n.readBucket.Consume(float64(size))
 			if wait > 0 {
@@ -339,7 +340,7 @@ func (n *node) Unicast(dest string, msg transport.Message) error {
 	header := transport.NewHeader(myAddr, myAddr, dest)
 	pkt := transport.Packet{Header: &header, Msg: &msg}
 	//Rate limiting
-	if n.congestionControl {
+	if n.congestionControl.Load() {
 		size := CellSize
 
 		//Check bucket

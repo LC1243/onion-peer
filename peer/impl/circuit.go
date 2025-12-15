@@ -326,7 +326,7 @@ func (n *node) HandleRelayAsOP(cell Cell, src string, cc *ClientCircuit) error {
 
 // HandleRelaySendmeAsOP handles a RelaySendme command when acting as OP
 func (n *node) HandleRelaySendmeAsOP(relayCell RelayCell, cc *ClientCircuit) error {
-	if !n.congestionControl {
+	if !n.congestionControl.Load() {
 		return nil
 	}
 
@@ -452,7 +452,7 @@ func (n *node) HandleForwardRelay(cell Cell, circ *Circuit) error {
 
 	// Hop-by-Hop Flow Control: Intercept circuit-level SENDME (streamID=0) from PrevHop
 	// A SENDME from PrevHop means: "I can receive more cells" → increase our BackwardPackageWindow
-	if n.congestionControl && relayCell.Command == RelaySendme && relayCell.StreamID == 0 {
+	if n.congestionControl.Load() && relayCell.Command == RelaySendme && relayCell.StreamID == 0 {
 		n.circuitsMu.Lock()
 		circ.BackwardPackageWindow += WindowIncrement
 		circ.BackwardWindowCond.Broadcast()
@@ -481,7 +481,7 @@ func (n *node) HandleForwardRelay(cell Cell, circ *Circuit) error {
 	// Hop-by-Hop Flow Control: Only count DATA cells towards the window
 	// Control cells (EXTEND, etc.) don't count
 	isDataCell := relayCell.Command == RelayData
-	if n.congestionControl && isDataCell {
+	if n.congestionControl.Load() && isDataCell {
 		// Decrement ForwardDeliverWindow for DATA cells received from PrevHop
 		n.circuitsMu.Lock()
 		circ.ForwardDeliverWindow--
@@ -588,7 +588,7 @@ func (n *node) HandleBackwardRelay(cell Cell, circ *Circuit) error {
 
 	// Hop-by-Hop Flow Control: Intercept circuit-level SENDME (streamID=0) from NextHop
 	// A SENDME from NextHop means: "I can receive more cells" → increase our ForwardPackageWindow
-	if n.congestionControl && relayCell.Command == RelaySendme && relayCell.StreamID == 0 {
+	if n.congestionControl.Load() && relayCell.Command == RelaySendme && relayCell.StreamID == 0 {
 		n.circuitsMu.Lock()
 		circ.ForwardPackageWindow += WindowIncrement
 		circ.ForwardWindowCond.Broadcast()
@@ -603,7 +603,7 @@ func (n *node) HandleBackwardRelay(cell Cell, circ *Circuit) error {
 	// Hop-by-Hop Flow Control for backward direction
 	// Only count DATA cells towards the window. Control cells don't count.
 	isDataCell := relayCell.Command == RelayData
-	if n.congestionControl && isDataCell {
+	if n.congestionControl.Load() && isDataCell {
 		// Decrement BackwardDeliverWindow for DATA cells received from NextHop
 		n.circuitsMu.Lock()
 		circ.BackwardDeliverWindow--
@@ -932,7 +932,7 @@ func (n *node) SendCell(dest string, cell Cell, circ ...interface{}) error {
 	}
 
 	// If congestion control is enabled, use the scheduler
-	if n.congestionControl && n.scheduler != nil {
+	if n.congestionControl.Load() && n.scheduler != nil {
 		isBulk := false
 		if len(circ) > 0 && circ[0] != nil {
 			switch c := circ[0].(type) {
@@ -1377,7 +1377,7 @@ func (n *node) SendRelayEndAsClient(circID, streamID uint16) error {
 func (n *node) SendExtendToHop(cc *ClientCircuit, nextHop string) error {
 	// Flow Control: Check and decrement PackageWindow
 	// NOTE: Caller (HandleCreatedAsOP or HandleRelayExtendedAsOP) already holds n.clientCircuitsMu
-	if n.congestionControl {
+	if n.congestionControl.Load() {
 		for cc.PackageWindow <= 0 {
 			cc.WindowCond.Wait()
 		}
@@ -1905,7 +1905,7 @@ func (n *node) GetClientCircuitsNbr() int {
 
 // SetCongestionControl enables or disables congestion control.
 func (n *node) SetCongestionControl(enable bool) {
-	n.congestionControl = enable
+	n.congestionControl.Store(enable)
 }
 
 // HasStream reports whether a stream exists for a client circuit
@@ -2176,7 +2176,7 @@ func (n *node) SendStreamData(circID, streamID uint16, data []byte) error {
 	}
 
 	// Stream-level Flow Control: Wait for PackageWindow before sending
-	if n.congestionControl {
+	if n.congestionControl.Load() {
 		stream.mu.Lock()
 		for stream.PackageWindow <= 0 {
 			stream.WindowCond.Wait()
@@ -2470,7 +2470,7 @@ func (n *node) HandleRelayData(relay RelayCell, circ *Circuit) error {
 	// Hop-by-hop circuit-level flow control: Exit receives DATA from PrevHop (Middle)
 	// Decrement ForwardDeliverWindow and send circuit SENDME (streamID=0) back to PrevHop
 	// This is the same mechanism used at every relay in the circuit
-	if n.congestionControl {
+	if n.congestionControl.Load() {
 		n.circuitsMu.Lock()
 		circ.ForwardDeliverWindow--
 		shouldSendCircuitSendme := (DefaultWindowSize - circ.ForwardDeliverWindow) >= WindowIncrement
@@ -2488,7 +2488,7 @@ func (n *node) HandleRelayData(relay RelayCell, circ *Circuit) error {
 
 	// Stream-level Flow Control: Decrement DeliverWindow for receiving
 	// Send stream SENDME (streamID != 0) to client when threshold reached
-	if n.congestionControl {
+	if n.congestionControl.Load() {
 		stream.mu.Lock()
 		stream.DeliverWindow--
 		shouldSendStreamSendme := (DefaultStreamWindowSize - stream.DeliverWindow) >= StreamWindowIncrement
@@ -2516,7 +2516,7 @@ func (n *node) HandleRelayData(relay RelayCell, circ *Circuit) error {
 	// Send reply asynchronously to avoid blocking the message handler loop
 	go func() {
 		// Stream-level Flow Control: Wait for PackageWindow before sending reply
-		if n.congestionControl {
+		if n.congestionControl.Load() {
 			stream.mu.Lock()
 			for stream.PackageWindow <= 0 {
 				stream.WindowCond.Wait()
@@ -2565,7 +2565,7 @@ func (n *node) HandleRelayDataAsOP(relay RelayCell, cc *ClientCircuit) error {
 	// Hop-by-hop circuit-level flow control: Client receives DATA from Guard
 	// Decrement BackwardDeliverWindow and send circuit SENDME (streamID=0) to Guard
 	// This is the same mechanism used at every node pair in the circuit
-	if n.congestionControl {
+	if n.congestionControl.Load() {
 		n.clientCircuitsMu.Lock()
 		cc.BackwardDeliverWindow--
 		shouldSendCircuitSendme := (DefaultWindowSize - cc.BackwardDeliverWindow) >= WindowIncrement
@@ -2583,7 +2583,7 @@ func (n *node) HandleRelayDataAsOP(relay RelayCell, cc *ClientCircuit) error {
 
 	// Stream-level Flow Control: Decrement DeliverWindow for receiving
 	// Send stream SENDME (streamID != 0) to Exit when threshold reached
-	if n.congestionControl {
+	if n.congestionControl.Load() {
 		stream.mu.Lock()
 		stream.DeliverWindow--
 		shouldSendStreamSendme := (DefaultStreamWindowSize - stream.DeliverWindow) >= StreamWindowIncrement
@@ -2626,7 +2626,7 @@ func (n *node) HandleRelayDataAsOP(relay RelayCell, cc *ClientCircuit) error {
 
 // HandleRelaySendme handles a RelaySendme command
 func (n *node) HandleRelaySendme(cell RelayCell, circ *Circuit) error {
-	if !n.congestionControl {
+	if !n.congestionControl.Load() {
 		return nil
 	}
 
