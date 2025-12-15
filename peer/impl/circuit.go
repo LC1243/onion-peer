@@ -20,9 +20,21 @@ type Circuit struct {
 	NextHop   string
 	State     string // "pending", "established"
 
-	//Flow control
-	PackageWindow int // Number of cells that can be sent
-	DeliverWindow int // Number of cells that can be received
+	// Hop-by-hop circuit-level flow control - separate windows for each direction
+	// This applies at every relay: Guard↔Middle, Middle↔Exit, etc.
+	// Forward direction (PrevHop -> this node -> NextHop)
+	ForwardPackageWindow int        // Cells we can send to NextHop
+	ForwardDeliverWindow int        // Cells we can accept from PrevHop
+	ForwardWindowCond    *sync.Cond // To block when ForwardPackageWindow is 0
+
+	// Backward direction (NextHop -> this node -> PrevHop)
+	BackwardPackageWindow int        // Cells we can send to PrevHop
+	BackwardDeliverWindow int        // Cells we can accept from NextHop
+	BackwardWindowCond    *sync.Cond // To block when BackwardPackageWindow is 0
+
+	// Legacy fields (kept for backward compatibility with endpoint flow control)
+	PackageWindow int // Number of cells that can be sent (used by exit node)
+	DeliverWindow int // Number of cells that can be received (used by exit node)
 	WindowCond    *sync.Cond
 
 	// Crypto synchronization
@@ -117,10 +129,15 @@ type ClientCircuit struct {
 	ReadyChan chan struct{}      // Closed when circuit is ready
 	Error     error              // Set if circuit creation fails
 
-	//Flow control
-	PackageWindow int // Number of cells that can be sent
-	DeliverWindow int // Number of cells that can be received
+	// Stream-level flow control (end-to-end with Exit)
+	PackageWindow int // Number of cells that can be sent (stream level)
+	DeliverWindow int // Number of cells that can be received (stream level)
 	WindowCond    *sync.Cond
+
+	// Hop-by-hop circuit-level flow control (with adjacent hop - Guard)
+	// Note: This mechanism applies at every node pair in the circuit
+	ForwardPackageWindow  int // Cells we can send to next hop (Guard)
+	BackwardDeliverWindow int // Cells we can receive from next hop (Guard)
 
 	// Fairness / Prioritization
 	StatsMu   sync.Mutex // Protects CellCount and IsBulk
@@ -144,13 +161,19 @@ func (n *node) HandleCreate(cell Cell, src string) error {
 
 	// Create new circuit
 	circ := &Circuit{
-		InCircID:      cell.CircID,
-		PrevHop:       src,
-		State:         "established",
-		PackageWindow: DefaultWindowSize,
-		DeliverWindow: DefaultWindowSize,
+		InCircID:              cell.CircID,
+		PrevHop:               src,
+		State:                 "established",
+		PackageWindow:         DefaultWindowSize,
+		DeliverWindow:         DefaultWindowSize,
+		ForwardPackageWindow:  DefaultWindowSize,
+		ForwardDeliverWindow:  DefaultWindowSize,
+		BackwardPackageWindow: DefaultWindowSize,
+		BackwardDeliverWindow: DefaultWindowSize,
 	}
 	circ.WindowCond = sync.NewCond(&n.circuitsMu)
+	circ.ForwardWindowCond = sync.NewCond(&n.circuitsMu)
+	circ.BackwardWindowCond = sync.NewCond(&n.circuitsMu)
 	n.circuits[key] = circ
 
 	// Track this circuit ID
@@ -427,6 +450,20 @@ func (n *node) HandleForwardRelay(cell Cell, circ *Circuit) error {
 		return fmt.Errorf("failed to decrypt relay cell data: %w", err)
 	}
 
+	// Hop-by-Hop Flow Control: Intercept circuit-level SENDME (streamID=0) from PrevHop
+	// A SENDME from PrevHop means: "I can receive more cells" → increase our BackwardPackageWindow
+	if n.congestionControl && relayCell.Command == RelaySendme && relayCell.StreamID == 0 {
+		n.circuitsMu.Lock()
+		circ.BackwardPackageWindow += WindowIncrement
+		circ.BackwardWindowCond.Broadcast()
+		n.circuitsMu.Unlock()
+		n.log.Info().
+			Uint16("circID", circ.InCircID).
+			Int("newBackwardPackageWindow", circ.BackwardPackageWindow).
+			Msg("Processed hop-by-hop SENDME from PrevHop, increased BackwardPackageWindow")
+		return nil // Don't forward circuit-level SENDME
+	}
+
 	if circ.NextHop == "" {
 		// We are the end of the circuit, process the relay command
 		// Replace the encrypted Data with decrypted plaintext
@@ -441,8 +478,37 @@ func (n *node) HandleForwardRelay(cell Cell, circ *Circuit) error {
 
 	// We are an intermediate node, forward the decrypted data to NextHop
 
-	// Flow Control: Relays do not decrement the circuit window for cells that they are just relaying
-	// So we do NOT decrement PackageWindow here
+	// Hop-by-Hop Flow Control: Only count DATA cells towards the window
+	// Control cells (EXTEND, etc.) don't count
+	isDataCell := relayCell.Command == RelayData
+	if n.congestionControl && isDataCell {
+		// Decrement ForwardDeliverWindow for DATA cells received from PrevHop
+		n.circuitsMu.Lock()
+		circ.ForwardDeliverWindow--
+		shouldSendSendme := (DefaultWindowSize - circ.ForwardDeliverWindow) >= WindowIncrement
+		if shouldSendSendme {
+			circ.ForwardDeliverWindow += WindowIncrement
+		}
+		n.circuitsMu.Unlock()
+
+		// Send SENDME back to PrevHop if threshold reached (signals we can receive more)
+		if shouldSendSendme {
+			if err := n.sendRelaySendmeToHop(circ, circ.PrevHop, circ.InCircID); err != nil {
+				n.log.Error().Err(err).Msg("Failed to send RELAY_SENDME to PrevHop")
+			}
+		}
+
+		// Wait for ForwardPackageWindow before forwarding to NextHop
+		n.circuitsMu.Lock()
+		for circ.ForwardPackageWindow <= 0 {
+			n.log.Debug().
+				Uint16("circID", circ.InCircID).
+				Msg("ForwardPackageWindow exhausted, waiting for SENDME from NextHop")
+			circ.ForwardWindowCond.Wait()
+		}
+		circ.ForwardPackageWindow--
+		n.circuitsMu.Unlock()
+	}
 
 	// Recompute digest for the decrypted data
 	h := sha256.New()
@@ -518,6 +584,52 @@ func (n *node) HandleBackwardRelay(cell Cell, circ *Circuit) error {
 			Uint16("circID", circ.InCircID).
 			Msg("No crypto state found for backward relay")
 		return fmt.Errorf("no crypto state found for circuit %d", circ.InCircID)
+	}
+
+	// Hop-by-Hop Flow Control: Intercept circuit-level SENDME (streamID=0) from NextHop
+	// A SENDME from NextHop means: "I can receive more cells" → increase our ForwardPackageWindow
+	if n.congestionControl && relayCell.Command == RelaySendme && relayCell.StreamID == 0 {
+		n.circuitsMu.Lock()
+		circ.ForwardPackageWindow += WindowIncrement
+		circ.ForwardWindowCond.Broadcast()
+		n.circuitsMu.Unlock()
+		n.log.Info().
+			Uint16("circID", circ.InCircID).
+			Int("newForwardPackageWindow", circ.ForwardPackageWindow).
+			Msg("Processed hop-by-hop SENDME from NextHop, increased ForwardPackageWindow")
+		return nil // Don't forward circuit-level SENDME
+	}
+
+	// Hop-by-Hop Flow Control for backward direction
+	// Only count DATA cells towards the window. Control cells don't count.
+	isDataCell := relayCell.Command == RelayData
+	if n.congestionControl && isDataCell {
+		// Decrement BackwardDeliverWindow for DATA cells received from NextHop
+		n.circuitsMu.Lock()
+		circ.BackwardDeliverWindow--
+		shouldSendSendme := (DefaultWindowSize - circ.BackwardDeliverWindow) >= WindowIncrement
+		if shouldSendSendme {
+			circ.BackwardDeliverWindow += WindowIncrement
+		}
+		n.circuitsMu.Unlock()
+
+		// Send SENDME back to NextHop if threshold reached (signals we can receive more)
+		if shouldSendSendme {
+			if err := n.sendRelaySendmeToHop(circ, circ.NextHop, circ.OutCircID); err != nil {
+				n.log.Error().Err(err).Msg("Failed to send RELAY_SENDME to NextHop")
+			}
+		}
+
+		// Wait for BackwardPackageWindow before forwarding to PrevHop
+		n.circuitsMu.Lock()
+		for circ.BackwardPackageWindow <= 0 {
+			n.log.Debug().
+				Uint16("circID", circ.InCircID).
+				Msg("BackwardPackageWindow exhausted, waiting for SENDME from PrevHop")
+			circ.BackwardWindowCond.Wait()
+		}
+		circ.BackwardPackageWindow--
+		n.circuitsMu.Unlock()
 	}
 
 	// Encrypt one layer using our crypto state (adding a layer of encryption)
@@ -860,12 +972,14 @@ func (n *node) BuildCircuit(hops [3]string, timeout time.Duration) (uint16, erro
 
 	// Create the client circuit state
 	cc := &ClientCircuit{
-		CircID:        circID,
-		Hops:          hops,
-		State:         CircuitStateCreating,
-		ReadyChan:     make(chan struct{}),
-		PackageWindow: DefaultWindowSize,
-		DeliverWindow: DefaultWindowSize,
+		CircID:                circID,
+		Hops:                  hops,
+		State:                 CircuitStateCreating,
+		ReadyChan:             make(chan struct{}),
+		PackageWindow:         DefaultWindowSize,
+		DeliverWindow:         DefaultWindowSize,
+		ForwardPackageWindow:  DefaultWindowSize,
+		BackwardDeliverWindow: DefaultWindowSize,
 	}
 	cc.WindowCond = sync.NewCond(&n.clientCircuitsMu)
 
@@ -2061,7 +2175,7 @@ func (n *node) SendStreamData(circID, streamID uint16, data []byte) error {
 		return err
 	}
 
-	// Stream Flow Control: Check and decrement Stream PackageWindow
+	// Stream-level Flow Control: Wait for PackageWindow before sending
 	if n.congestionControl {
 		stream.mu.Lock()
 		for stream.PackageWindow <= 0 {
@@ -2078,15 +2192,6 @@ func (n *node) SendStreamData(circID, streamID uint16, data []byte) error {
 		n.clientCircuitsMu.Unlock()
 		return fmt.Errorf("client circuit %d not found", circID)
 	}
-
-	// Flow Control: Check and decrement PackageWindow
-	if n.congestionControl {
-		for cc.PackageWindow <= 0 {
-			cc.WindowCond.Wait()
-		}
-		cc.PackageWindow--
-	}
-
 	cryptoStates := n.circuitCryptoStates[circID]
 	n.clientCircuitsMu.Unlock()
 
@@ -2275,6 +2380,55 @@ func (n *node) sendRelaySendmeStream(circ *Circuit, streamID uint16) error {
 	return n.SendCell(circ.PrevHop, cell)
 }
 
+// sendRelaySendmeToHop sends a circuit-level RELAY_SENDME to a specific hop (for hop-by-hop flow control)
+// This is used by intermediate relays to signal they can receive more cells from that hop
+func (n *node) sendRelaySendmeToHop(circ *Circuit, dest string, circID uint16) error {
+	n.log.Info().
+		Uint16("circID", circID).
+		Str("dest", dest).
+		Msg("Sending circuit-level RELAY_SENDME to hop")
+
+	// For hop-by-hop SENDME, we send it unencrypted (the neighboring hop will process it directly)
+	// StreamID = 0 means circuit-level SENDME
+	relayCell := RelayCell{
+		CircID:   circID,
+		StreamID: 0,
+		Command:  RelaySendme,
+		Length:   0,
+		Data:     []byte{},
+	}
+
+	cell, err := n.EncodeRelayCell(relayCell)
+	if err != nil {
+		return err
+	}
+	return n.SendCell(dest, cell)
+}
+
+// sendRelaySendmeToHopAsOP sends a circuit-level RELAY_SENDME from Client to Guard
+// This is hop-by-hop flow control - the same mechanism used at every node pair
+func (n *node) sendRelaySendmeToHopAsOP(cc *ClientCircuit) error {
+	n.log.Info().
+		Uint16("circID", cc.CircID).
+		Str("guard", cc.Hops[0]).
+		Msg("Client: Sending circuit-level RELAY_SENDME to Guard")
+
+	// Circuit-level SENDME: streamID = 0, unencrypted (direct to neighbor)
+	relayCell := RelayCell{
+		CircID:   cc.CircID,
+		StreamID: 0,
+		Command:  RelaySendme,
+		Length:   0,
+		Data:     []byte{},
+	}
+
+	cell, err := n.EncodeRelayCell(relayCell)
+	if err != nil {
+		return err
+	}
+	return n.SendCell(cc.Hops[0], cell)
+}
+
 // decryptRelayDataAtClient decrypts RELAY_DATA through all circuit hops
 func decryptRelayDataAtClient(cryptoStates []*CircuitCryptoState, encryptedPayload []byte, digest [6]byte) []byte {
 	plainPayload := encryptedPayload
@@ -2307,31 +2461,33 @@ func (n *node) HandleRelayData(relay RelayCell, circ *Circuit) error {
 		Int("dataLen", len(relay.Data)).
 		Msg("Handling RELAY_DATA at exit node")
 
-	// Flow Control: Decrement DeliverWindow
-	if n.congestionControl {
-		n.circuitsMu.Lock()
-		circ.DeliverWindow--
-		shouldSend := (DefaultWindowSize - circ.DeliverWindow) >= WindowIncrement
-		if shouldSend {
-			circ.DeliverWindow += WindowIncrement
-		}
-		n.circuitsMu.Unlock()
-
-		if shouldSend {
-			err := n.sendRelaySendmeStream(circ, 0)
-			if err != nil {
-				n.log.Error().Err(err).Msg("Failed to send RELAY_SENDME")
-			}
-		}
-	}
-
 	// Validate stream exists and is open
 	stream, err := n.validateStreamForData(circ.InCircID, relay.StreamID)
 	if err != nil {
 		return err
 	}
 
-	// Stream Flow Control: Decrement DeliverWindow
+	// Hop-by-hop circuit-level flow control: Exit receives DATA from PrevHop (Middle)
+	// Decrement ForwardDeliverWindow and send circuit SENDME (streamID=0) back to PrevHop
+	// This is the same mechanism used at every relay in the circuit
+	if n.congestionControl {
+		n.circuitsMu.Lock()
+		circ.ForwardDeliverWindow--
+		shouldSendCircuitSendme := (DefaultWindowSize - circ.ForwardDeliverWindow) >= WindowIncrement
+		if shouldSendCircuitSendme {
+			circ.ForwardDeliverWindow += WindowIncrement
+		}
+		n.circuitsMu.Unlock()
+
+		if shouldSendCircuitSendme {
+			if err := n.sendRelaySendmeToHop(circ, circ.PrevHop, circ.InCircID); err != nil {
+				n.log.Error().Err(err).Msg("Exit: Failed to send circuit SENDME to PrevHop")
+			}
+		}
+	}
+
+	// Stream-level Flow Control: Decrement DeliverWindow for receiving
+	// Send stream SENDME (streamID != 0) to client when threshold reached
 	if n.congestionControl {
 		stream.mu.Lock()
 		stream.DeliverWindow--
@@ -2358,18 +2514,9 @@ func (n *node) HandleRelayData(relay RelayCell, circ *Circuit) error {
 		Msg("Stored received data, sending reply back to client")
 
 	// Send reply asynchronously to avoid blocking the message handler loop
-	// This prevents deadlocks where we wait for a SENDME that can't be processed
 	go func() {
-		// Flow Control: Decrement PackageWindow for the reply
+		// Stream-level Flow Control: Wait for PackageWindow before sending reply
 		if n.congestionControl {
-			n.circuitsMu.Lock()
-			for circ.PackageWindow <= 0 {
-				circ.WindowCond.Wait()
-			}
-			circ.PackageWindow--
-			n.circuitsMu.Unlock()
-
-			// Stream Flow Control: Decrement PackageWindow for the reply
 			stream.mu.Lock()
 			for stream.PackageWindow <= 0 {
 				stream.WindowCond.Wait()
@@ -2409,31 +2556,33 @@ func (n *node) HandleRelayDataAsOP(relay RelayCell, cc *ClientCircuit) error {
 		Int("dataLen", len(relay.Data)).
 		Msg("Handling RELAY_DATA as client")
 
-	// Flow Control: Decrement DeliverWindow
-	if n.congestionControl {
-		n.clientCircuitsMu.Lock()
-		cc.DeliverWindow--
-		shouldSend := (DefaultWindowSize - cc.DeliverWindow) >= WindowIncrement
-		if shouldSend {
-			cc.DeliverWindow += WindowIncrement
-		}
-		n.clientCircuitsMu.Unlock()
-
-		if shouldSend {
-			err := n.sendRelaySendmeStreamAsOP(cc, 0)
-			if err != nil {
-				n.log.Error().Err(err).Msg("Failed to send RELAY_SENDME")
-			}
-		}
-	}
-
 	// Validate stream exists and is open
 	stream, err := n.validateStreamForData(cc.CircID, relay.StreamID)
 	if err != nil {
 		return err
 	}
 
-	// Stream Flow Control: Decrement DeliverWindow
+	// Hop-by-hop circuit-level flow control: Client receives DATA from Guard
+	// Decrement BackwardDeliverWindow and send circuit SENDME (streamID=0) to Guard
+	// This is the same mechanism used at every node pair in the circuit
+	if n.congestionControl {
+		n.clientCircuitsMu.Lock()
+		cc.BackwardDeliverWindow--
+		shouldSendCircuitSendme := (DefaultWindowSize - cc.BackwardDeliverWindow) >= WindowIncrement
+		if shouldSendCircuitSendme {
+			cc.BackwardDeliverWindow += WindowIncrement
+		}
+		n.clientCircuitsMu.Unlock()
+
+		if shouldSendCircuitSendme {
+			if err := n.sendRelaySendmeToHopAsOP(cc); err != nil {
+				n.log.Error().Err(err).Msg("Client: Failed to send circuit SENDME to Guard")
+			}
+		}
+	}
+
+	// Stream-level Flow Control: Decrement DeliverWindow for receiving
+	// Send stream SENDME (streamID != 0) to Exit when threshold reached
 	if n.congestionControl {
 		stream.mu.Lock()
 		stream.DeliverWindow--
