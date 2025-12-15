@@ -14,6 +14,7 @@ type Peer interface {
 	Messaging
 	Tor
 	TorStreams
+	TorHiddenServices
 }
 
 // Tor defines the interface for Tor-like onion routing functionality.
@@ -82,6 +83,50 @@ type TorStreams interface {
 
 	// Get the packets received over a stream (for testing)
 	GetReceivedStreamPackets(circID, streamID uint16) ([][]byte, error)
+}
+
+type TorHiddenServices interface {
+	// GenerateHiddenServiceID creates a hidden service locally and returns its serviceID
+	GenerateHiddenServiceID() (string, error)
+
+	// EstablishIntroPoint establishes an intro point for a hidden service.
+	// It tells the exit OR on circID that it should act as an introduction point for Bob's hidden service.
+	EstablishIntroPoint(serviceID string, circID uint16, timeout time.Duration) error
+
+	// PublishDescriptorToHSDir publishes a service descriptor to the HSDir
+	PublishDescriptorToHSDir(serviceID string, introORs []string,
+		lifetime time.Duration, circID uint16, timeout time.Duration) error
+
+	// GetServiceIntroPoints returns the intro points for a hidden service
+	GetServiceIntroPoints(serviceID string) []string
+
+	// GetIntroPointCount returns the number of intro points for a hidden service
+	GetIntroPointCount(serviceID string) int
+
+	// LookupDescriptor looks up a service descriptor and returns (exists, introduction points[])
+	LookupDescriptor(circID uint16, serviceID string, timeout time.Duration) (bool, []string)
+
+	// GetIntroPointStateCount returns the number of intro points that have been established
+	GetIntroPointStateCount(serviceID string) int
+
+	// CreateHiddenService creates a full hidden service
+	// Create the service locally, builds a circuit, establishes intro points, builds descriptor, publishes descriptor
+	CreateHiddenService(introPoints [][3]string,
+		timeout time.Duration,
+		lifetime time.Duration) (string, []uint16, error)
+
+	// DeleteHiddenService deletes a hidden service from a local node. This is enough since:
+	//   - Service descriptors contain an expiration time.
+	//   - Hidden Service Directories (HSDirs) automatically discard expired descriptors.
+	//   - Introduction points are bound to circuits and disappear when circuits are closed.
+	//
+	// Therefore, deleting a hidden service is achieved by:
+	//   1) Destroying all introduction point circuits.
+	//   2) Removing the service from the local state so it is no longer republished.
+	DeleteHiddenService(serviceID string) error
+
+	// SetPeerAsHSDir sets the flag to indicate if the peer should act as a lookup server
+	SetPeerAsHSDir(value bool)
 }
 
 // Factory is the type of function we are using to create new instances of

@@ -61,6 +61,13 @@ func NewPeer(conf peer.Configuration) peer.Peer {
 	n.diffieHellmanHandshakePairs = make(map[uint16]*DiffieHellmanHandshakePairs)
 	n.circuitCryptoStates = make(map[uint16][]*CircuitCryptoState)
 
+	n.serviceKeys = make(map[string]*OnionKeyPair)
+	n.hiddenServices = make(map[string]*HiddenService)
+	n.introPoints = make(map[string][]*IntroPointState)
+	n.introWait = make(map[uint16]chan struct{})
+	n.hsDirStore = make(map[string]*ServiceDescriptor)
+	n.hsdirWait = make(map[uint16]chan *ServiceDescriptor)
+
 	// Generate onion keypair for this node
 	// Note: In production, this should be loaded from persistent storage
 	// For now, we generate a new keypair each time
@@ -157,6 +164,25 @@ type node struct {
 	writeBucket *TokenBucket // Token bucket for outgoing data
 	readBucket  *TokenBucket // Token bucket for incoming data
 	packetCh    chan transport.Packet
+
+	serviceKeys    map[string]*OnionKeyPair
+	hiddenServices map[string]*HiddenService
+
+	introPoints   map[string][]*IntroPointState // serviceID -> state
+	introPointsMu sync.RWMutex
+
+	introWaitMu sync.Mutex
+	introWait   map[uint16]chan struct{} // circID -> done
+
+	// IsHiddenServiceDir indicates whether the peer acts as a directory for hidden services
+	// so that multiple peers can look up for services.
+	// Default: false
+	IsHiddenServiceDir bool
+	// In case a node acts as a hidden service directory
+	hsDirStore  map[string]*ServiceDescriptor
+	hsDirMu     sync.RWMutex
+	hsdirWaitMu sync.Mutex
+	hsdirWait   map[uint16]chan *ServiceDescriptor
 }
 
 // Start implements peer.Service
