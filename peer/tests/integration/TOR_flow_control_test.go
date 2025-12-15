@@ -68,7 +68,7 @@ func Test_TOR_FlowControl_Circuit_Level_Single(t *testing.T) {
 				// Retry if stream is not yet open
 				time.Sleep(10 * time.Millisecond)
 			}
-			time.Sleep(1 * time.Millisecond) // 1 ms sleep is enough with rate limiting
+			time.Sleep(5 * time.Millisecond)
 		}
 	}()
 
@@ -151,7 +151,7 @@ func Test_TOR_FlowControl_Circuit_Level_Multiple_Clients(t *testing.T) {
 					}
 					time.Sleep(10 * time.Millisecond)
 				}
-				time.Sleep(1 * time.Millisecond) // 1 ms sleep is enough with rate limiting
+				time.Sleep(5 * time.Millisecond)
 			}
 		}()
 
