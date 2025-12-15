@@ -151,7 +151,7 @@ func Test_TOR_FlowControl_Circuit_Level_Multiple_Clients(t *testing.T) {
 					}
 					time.Sleep(10 * time.Millisecond)
 				}
-				time.Sleep(5 * time.Millisecond)
+				time.Sleep(10 * time.Millisecond)
 			}
 		}()
 
