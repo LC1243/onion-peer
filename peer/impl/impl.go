@@ -61,6 +61,7 @@ func NewPeer(conf peer.Configuration) peer.Peer {
 	n.introWait = make(map[uint16]chan struct{})
 	n.hsDirStore = make(map[string]*ServiceDescriptor)
 	n.hsdirWait = make(map[uint16]chan *ServiceDescriptor)
+	n.cookieAck = make(map[uint16]chan struct{})
 
 	// Generate onion keypair for this node
 	// Note: In production, this should be loaded from persistent storage
@@ -159,6 +160,9 @@ type node struct {
 
 	introWaitMu sync.Mutex
 	introWait   map[uint16]chan struct{} // circID -> done
+
+	cookieAckMu sync.Mutex
+	cookieAck   map[uint16]chan struct{} // circID -> done
 
 	// IsHiddenServiceDir indicates whether the peer acts as a directory for hidden services
 	// so that multiple peers can look up for services.
