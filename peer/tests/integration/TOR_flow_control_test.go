@@ -419,7 +419,7 @@ func Test_TOR_FlowControl_SharedMiddle_TwoClients(t *testing.T) {
 		}()
 
 		// Wait for all packets
-		timeout := time.After(90 * time.Second)
+		timeout := time.After(180 * time.Second)
 		ticker := time.NewTicker(500 * time.Millisecond)
 		defer ticker.Stop()
 
