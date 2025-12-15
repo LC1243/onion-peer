@@ -95,6 +95,11 @@ type TorHiddenServices interface {
 	PublishDescriptorToHSDir(serviceID string, introORs []string,
 		lifetime time.Duration, circID uint16, timeout time.Duration) error
 
+	// PrepareRendezvousPoint prepares a rendezvous point on the given circID for a given serviceID.
+	// It returns the cookie that the client will send to the hidden service to connect at the RP.
+	PrepareRendezvousPoint(serviceID, circID uint16,
+		timeout time.Duration) (cookie []byte, err error)
+
 	// GetServiceIntroPoints returns the intro points for a hidden service
 	GetServiceIntroPoints(serviceID string) []string
 

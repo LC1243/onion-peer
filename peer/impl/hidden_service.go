@@ -879,3 +879,89 @@ func (n *node) DeleteHiddenService(serviceID string) error {
 
 	return nil
 }
+
+// PrepareRendezvousPoint implements peer.TorHiddenServices
+func (n *node) PrepareRendezvousPoint(serviceID, circID uint16,
+	timeout time.Duration) (cookie [CookieSize]byte, err error) {
+	rendezvousCookie := make([]byte, CookieSize)
+	_, err = rand.Read(rendezvousCookie) // generate a random cookie
+	if err != nil {
+		return [CookieSize]byte{}, fmt.Errorf("failed to generate rendezvous cookie: %w", err)
+	}
+
+	n.log.Info().
+		Uint16("serviceID", serviceID).
+		Uint16("circID", circID).
+		Str("cookie", fmt.Sprintf("%x", rendezvousCookie)).
+		Msg("Rendezvous cookie generated")
+
+	replyCh := make(chan struct{})
+	n.cookieAckMu.Lock()
+	n.cookieAck[circID] = replyCh
+	n.cookieAckMu.Unlock()
+
+	err = n.SendRelayEstablishRP(circID, [CookieSize]byte(rendezvousCookie))
+	if err != nil {
+		n.cookieAckMu.Lock()
+		delete(n.cookieAck, circID)
+		n.cookieAckMu.Unlock()
+		return [CookieSize]byte{}, fmt.Errorf("failed to send establish rendezvous point: %w", err)
+	}
+
+	n.log.Info().
+		Uint16("serviceID", serviceID).
+		Uint16("circID", circID).
+		Str("cookie", fmt.Sprintf("%x", rendezvousCookie)).
+		Msg("Establish rendezvous point message sent, waiting for ACK")
+
+	select {
+	case <-replyCh:
+		n.log.Info().
+			Uint16("serviceID", serviceID).
+			Uint16("circID", circID).
+			Str("cookie", fmt.Sprintf("%x", rendezvousCookie)).
+			Msg("ACK received for rendezvous point establishment")
+		return [CookieSize]byte(rendezvousCookie), nil
+	case <-time.After(timeout):
+		return [CookieSize]byte{}, fmt.Errorf("established rendezvous ack timed out")
+	}
+}
+
+// SendRelayEstablishRP sends an establish rendezvous point relay cell to the selected OR
+func (n *node) SendRelayEstablishRP(circID uint16, cookie [CookieSize]byte) error {
+	n.clientCircuitsMu.RLock()
+	cc, exists := n.clientCircuits[circID]
+	n.clientCircuitsMu.RUnlock()
+	if !exists {
+		return fmt.Errorf("circuit %d not found", circID)
+	}
+	if cc.State != CircuitStateReady {
+		return fmt.Errorf("circuit %d not ready", circID)
+	}
+
+	cryptoStates := n.circuitCryptoStates[circID]
+	if len(cryptoStates) == 0 {
+		return fmt.Errorf("no crypto states for circuit %d", circID)
+	}
+
+	encryptedPayload, digest, err := EncryptRelayCellThroughCircuit(cryptoStates, cookie[:])
+	if err != nil {
+		return fmt.Errorf("failed to encrypt establish rendezvous cell: %w", err)
+	}
+
+	relayCell := RelayCell{
+		CircID:   circID,
+		StreamID: 0,
+		Command:  RelayEstablishRP,
+		Digest:   digest,
+		Data:     encryptedPayload,
+		Length:   uint16(len(encryptedPayload)),
+	}
+
+	cell, err := n.EncodeRelayCell(relayCell)
+	if err != nil {
+		return err
+	}
+
+	return n.SendCell(cc.Hops[0], cell)
+}
