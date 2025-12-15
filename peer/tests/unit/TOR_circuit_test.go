@@ -372,7 +372,7 @@ func Test_TOR_Circuit_Cleanup_ClientInitiated_Success(t *testing.T) {
 }
 
 // Test_TOR_Congestion_NoPacketLoss tests that a circuit can handle sending >1000 cells
-// without dropping them due to UDP buffer issues, thanks to the window mechanism (RELAY_SENDME).
+// without dropping them due to buffer issues, thanks to the window mechanism (RELAY_SENDME), and the rate limiting.
 func Test_TOR_Congestion_NoPacketLoss(t *testing.T) {
 	transp := channelFac()
 

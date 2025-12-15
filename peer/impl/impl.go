@@ -26,6 +26,7 @@ func NewPeer(conf peer.Configuration) peer.Peer {
 		stopped:           make(chan struct{}),
 		routing:           map[string]string{},
 		congestionControl: true,
+		packetCh:          make(chan transport.Packet, 2000),
 	}
 	// Configure logger: disabled if GLOG=="no", else enabled at info level to console
 	level := zerolog.InfoLevel
@@ -51,6 +52,9 @@ func NewPeer(conf peer.Configuration) peer.Peer {
 	n.clientCircuits = make(map[uint16]*ClientCircuit)
 	n.streamTables = make(map[uint16]*CircuitStreams)
 	n.congestionControl = true
+	// Initialize rate limiting token buckets
+	n.writeBucket = NewTokenBucket(DefaultRate, DefaultCapacity)
+	n.readBucket = NewTokenBucket(DefaultRate, DefaultCapacity)
 
 	// Initialize crypto state
 	n.peerOnionKeys = make(map[string]*rsa.PublicKey)
@@ -156,6 +160,11 @@ type node struct {
 	circuitIDMu sync.Mutex // Protects circuit ID generation
 	circuitIDs  []uint16   // Allocated circuit IDs
 
+	// Rate limiting
+	writeBucket *TokenBucket // Token bucket for outgoing data
+	readBucket  *TokenBucket // Token bucket for incoming data
+	packetCh    chan transport.Packet
+
 	serviceKeys    map[string]*OnionKeyPair
 	hiddenServices map[string]*HiddenService
 
@@ -218,6 +227,7 @@ func (n *node) Start() error {
 func (n *node) listenLoop() {
 	defer n.wg.Done()
 	defer close(n.stopped)
+	defer close(n.packetCh)
 
 	for {
 		select {
@@ -237,6 +247,19 @@ func (n *node) listenLoop() {
 		}
 		if err != nil {
 			continue
+		}
+
+		// Rate limiting
+		if n.congestionControl {
+			size := CellSize
+			wait := n.readBucket.Consume(float64(size))
+			if wait > 0 {
+				n.log.Info().
+					Int("size", size).
+					Dur("wait", wait).
+					Msg("Rate limiting: waiting to receive cell")
+				time.Sleep(wait)
+			}
 		}
 
 		n.handlePacket(pkt)
@@ -299,6 +322,21 @@ func (n *node) Unicast(dest string, msg transport.Message) error {
 	myAddr := n.conf.Socket.GetAddress()
 	header := transport.NewHeader(myAddr, myAddr, dest)
 	pkt := transport.Packet{Header: &header, Msg: &msg}
+	//Rate limiting
+	if n.congestionControl {
+		size := CellSize
+
+		//Check bucket
+		wait := n.writeBucket.Consume(float64(size))
+		if wait > 0 {
+			n.log.Info().
+				Str("dest", dest).
+				Int("size", size).
+				Dur("wait", wait).
+				Msg("Rate limiting: waiting to send cell")
+			time.Sleep(wait)
+		}
+	}
 	return n.conf.Socket.Send(nextHop, pkt, 2*time.Second)
 }
 
