@@ -979,3 +979,29 @@ func (n *node) HandleRelayRPEstablished(relay RelayCell) error {
 	close(ackCh)
 	return nil
 }
+
+// SendRPEstablished sends an ACK relay cell to confirm the rendezvous point establishment
+func (n *node) SendRPEstablished(circ *Circuit) error {
+	exitIdx := len(n.circuitCryptoStates[circ.InCircID]) - 1
+	cryptoState := n.circuitCryptoStates[circ.InCircID][exitIdx]
+
+	// no payload for ACK, still need to compute digest
+	emptyPayload, digest, err := EncryptRelayPayload(cryptoState, DirectionBackward, []byte{})
+	if err != nil {
+		return err
+	}
+
+	relay := RelayCell{
+		CircID:   circ.InCircID,
+		StreamID: 0,
+		Command:  RelayRPEstablished,
+		Digest:   digest,
+		Length:   uint16(len(emptyPayload)),
+		Data:     emptyPayload,
+	}
+	cell, err := n.EncodeRelayCell(relay)
+	if err != nil {
+		return err
+	}
+	return n.SendCell(circ.PrevHop, cell)
+}
