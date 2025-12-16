@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"hash"
 	"io"
+	"sync"
 
 	"golang.org/x/crypto/curve25519"
 	"golang.org/x/crypto/hkdf"
@@ -82,6 +83,9 @@ type CircuitCryptoState struct {
 	BackwardCipher      cipher.Stream
 	BackwardDigestState hash.Hash // Running SHA-1 digest state
 	BackwardDigestKey   []byte    // Key used to initialize the digest
+
+	// Mutex to protect concurrent access to digest states
+	mu sync.Mutex
 }
 
 // Direction indicates the direction of data flow in the circuit
@@ -344,6 +348,10 @@ func EncryptRelayPayload(
 		digestState = crypto.BackwardDigestState
 	}
 
+	// Lock to protect concurrent access to digest state
+	crypto.mu.Lock()
+	defer crypto.mu.Unlock()
+
 	// Incrementally add payload to the running digest
 	// Per Tor spec: "they each incrementally add to the SHA-1 digest the contents of all relay cells they create"
 	digestState.Write(payload)
@@ -390,6 +398,10 @@ func DecryptRelayPayload(
 	// Decrypt the payload using the stateful cipher stream
 	plaintext = make([]byte, len(ciphertext))
 	stream.XORKeyStream(plaintext, ciphertext)
+
+	// Lock to protect concurrent access to digest state
+	crypto.mu.Lock()
+	defer crypto.mu.Unlock()
 
 	// Check if this cell is for us by verifying the digest
 	// We maintain a running digest of received data
@@ -486,6 +498,10 @@ func DecryptRelayCellAtHop(
 		// No digest verification needed
 		return plaintext, false
 	}
+
+	// Lock to protect concurrent access to digest state
+	crypto.mu.Lock()
+	defer crypto.mu.Unlock()
 
 	// Verify digest: Check if this cell is for us
 	// We maintain a running digest of received data
