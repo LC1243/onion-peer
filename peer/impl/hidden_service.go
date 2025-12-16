@@ -522,10 +522,12 @@ func (n *node) PublishDescriptorToHSDir(serviceID string,
 	}
 
 	relay := RelayCell{
-		CircID: circID, StreamID: 0,
-		Command: RelayHSDirPublish,
-		Digest:  digest, Length: uint16(len(encrypted)),
-		Data: encrypted,
+		CircID:   circID,
+		StreamID: 0,
+		Command:  RelayHSDirPublish,
+		Digest:   digest,
+		Length:   uint16(len(encrypted)),
+		Data:     encrypted,
 	}
 	cell, err := n.EncodeRelayCell(relay)
 	if err != nil {
@@ -802,7 +804,8 @@ func (n *node) GetIntroPointStateCount(serviceID string) int {
 // CreateHiddenService implements peer.TorHiddenServices
 func (n *node) CreateHiddenService(introPoints [][3]string,
 	timeout time.Duration,
-	lifetime time.Duration) (string, []uint16, error) {
+	lifetime time.Duration,
+	IntroCircID uint16) (string, []uint16, error) {
 
 	if len(introPoints) == 0 {
 		return "", nil, fmt.Errorf("at least one intro path is required")
@@ -844,8 +847,7 @@ func (n *node) CreateHiddenService(introPoints [][3]string,
 	// Publish descriptor
 	introORs := n.GetServiceIntroPoints(serviceID)
 
-	//!FIXME: We need to build a circuit to the HSDir to publish the descriptor (not use the same as for the introduction point)
-	err = n.PublishDescriptorToHSDir(serviceID, introORs, lifetime, circuits[0], timeout)
+	err = n.PublishDescriptorToHSDir(serviceID, introORs, lifetime, IntroCircID, timeout)
 	if err != nil {
 		cleanup()
 		return "", nil, fmt.Errorf("publish descriptor failed: %w", err)

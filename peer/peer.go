@@ -111,11 +111,11 @@ type TorHiddenServices interface {
 
 	// CreateHiddenService creates a full hidden service
 	// Create the service locally, establishes intro points by building circuits into them,
-	// and builds a descriptor, which is published to the HSDir, which we already have a circuit to with circID.
+	// and builds a descriptor, which is published to the HSDir, which we already have a circuit to with IntroCircID.
 	CreateHiddenService(introPoints [][3]string,
 		timeout time.Duration,
 		lifetime time.Duration,
-		circID uint16) (string, []uint16, error)
+		IntroCircID uint16) (string, []uint16, error)
 
 	// DeleteHiddenService deletes a hidden service both locally and remotely. It works the following way:
 	//	 1) Removing the service descriptor from the HSDir.
