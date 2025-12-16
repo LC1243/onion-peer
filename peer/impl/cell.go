@@ -47,7 +47,8 @@ const (
 	RelayEstablishRP      = 16 // Alice -> RP (associate cookie with her circuit)
 	RelayHSDirPublish     = 17
 	RelayHSDirLookup      = 18
-	RelayHSDirReply       = 19
+	RelayHSDirDelete      = 19
+	RelayHSDirReply       = 20
 )
 
 type Cell struct {
