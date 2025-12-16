@@ -6,10 +6,13 @@ import (
 	"crypto/cipher"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha1"
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"hash"
 	"io"
+	"sync"
 
 	"golang.org/x/crypto/curve25519"
 	"golang.org/x/crypto/hkdf"
@@ -70,14 +73,19 @@ type DiffieHellmanHandshakePairs struct {
 // Each circuit hop maintains forward and backward encryption/decryption state.
 type CircuitCryptoState struct {
 	// Forward direction
-	ForwardKey    []byte
-	ForwardCipher cipher.Stream
-	ForwardDigest []byte // Running digest state
+	ForwardKey         []byte
+	ForwardCipher      cipher.Stream
+	ForwardDigestState hash.Hash // Running SHA-1 digest state
+	ForwardDigestKey   []byte    // Key used to initialize the digest
 
-	// Backward direction
-	BackwardKey    []byte
-	BackwardCipher cipher.Stream
-	BackwardDigest []byte // Running digest state
+	// Backward direction (Exit -> OP)
+	BackwardKey         []byte
+	BackwardCipher      cipher.Stream
+	BackwardDigestState hash.Hash // Running SHA-1 digest state
+	BackwardDigestKey   []byte    // Key used to initialize the digest
+
+	// Mutex to protect concurrent access to digest states
+	mu sync.Mutex
 }
 
 // Direction indicates the direction of data flow in the circuit
@@ -282,13 +290,22 @@ func generateCircuitKeys(sharedSecret []byte) (*CircuitCryptoState, error) {
 		return nil, fmt.Errorf("failed to create backward cipher: %w", err)
 	}
 
+	// Initialize running digest states with the digest keys
+	forwardDigest := sha1.New()
+	forwardDigest.Write(forwardDigestKey)
+
+	backwardDigest := sha1.New()
+	backwardDigest.Write(backwardDigestKey)
+
 	return &CircuitCryptoState{
-		ForwardKey:     forwardKey,
-		ForwardCipher:  forwardCipher,
-		ForwardDigest:  forwardDigestKey,
-		BackwardKey:    backwardKey,
-		BackwardCipher: backwardCipher,
-		BackwardDigest: backwardDigestKey,
+		ForwardKey:          forwardKey,
+		ForwardCipher:       forwardCipher,
+		ForwardDigestState:  forwardDigest,
+		ForwardDigestKey:    forwardDigestKey,
+		BackwardKey:         backwardKey,
+		BackwardCipher:      backwardCipher,
+		BackwardDigestState: backwardDigest,
+		BackwardDigestKey:   backwardDigestKey,
 	}, nil
 }
 
@@ -305,6 +322,7 @@ func newAESCTRStream(key []byte) (cipher.Stream, error) {
 
 // Encrypts a relay cell payload
 // Called when sending data through a circuit
+// Incrementally update the running digest with cell contents
 func EncryptRelayPayload(
 	crypto *CircuitCryptoState,
 	direction Direction,
@@ -318,26 +336,31 @@ func EncryptRelayPayload(
 		return nil, digest, errors.New("crypto state is nil")
 	}
 
-	// Select cipher and digest key based on direction
+	// Select cipher and digest state based on direction
 	var stream cipher.Stream
-	var digestKey []byte
+	var digestState hash.Hash
 
 	if direction == DirectionForward {
 		stream = crypto.ForwardCipher
-		digestKey = crypto.ForwardDigest
+		digestState = crypto.ForwardDigestState
 	} else {
 		stream = crypto.BackwardCipher
-		digestKey = crypto.BackwardDigest
+		digestState = crypto.BackwardDigestState
 	}
 
-	// Compute digest over the payload
-	h := sha256.New()
-	h.Write(digestKey)
-	h.Write(payload)
-	hash := h.Sum(nil)
-	copy(digest[:], hash[:6])
+	// Lock to protect concurrent access to digest state
+	crypto.mu.Lock()
+	defer crypto.mu.Unlock()
 
-	// Encrypt the payload
+	// Incrementally add payload to the running digest
+	// Per Tor spec: "they each incrementally add to the SHA-1 digest the contents of all relay cells they create"
+	digestState.Write(payload)
+
+	// Get current digest value (first 6 bytes of SHA-1 hash)
+	currentHash := digestState.Sum(nil)
+	copy(digest[:], currentHash[:6])
+
+	// Encrypt the payload using the stateful cipher stream
 	ciphertext = make([]byte, len(payload))
 	stream.XORKeyStream(ciphertext, payload)
 
@@ -346,6 +369,7 @@ func EncryptRelayPayload(
 
 // Decrypts a relay cell payload
 // Called when receiving data through a circuit
+// Checks digest against running digest state to determine if cell is for us
 func DecryptRelayPayload(
 	crypto *CircuitCryptoState,
 	direction Direction,
@@ -359,33 +383,41 @@ func DecryptRelayPayload(
 		return nil, errors.New("crypto state is nil")
 	}
 
-	// Select cipher and digest key based on direction
+	// Select cipher and digest state based on direction
 	var stream cipher.Stream
-	var digestKey []byte
+	var digestState hash.Hash
 
 	if direction == DirectionForward {
 		stream = crypto.ForwardCipher
-		digestKey = crypto.ForwardDigest
+		digestState = crypto.ForwardDigestState
 	} else {
 		stream = crypto.BackwardCipher
-		digestKey = crypto.BackwardDigest
+		digestState = crypto.BackwardDigestState
 	}
 
-	// Decrypt the payload
+	// Decrypt the payload using the stateful cipher stream
 	plaintext = make([]byte, len(ciphertext))
 	stream.XORKeyStream(plaintext, ciphertext)
 
-	// Verify digest
-	h := sha256.New()
-	h.Write(digestKey)
-	h.Write(plaintext)
-	hash := h.Sum(nil)
+	// Lock to protect concurrent access to digest state
+	crypto.mu.Lock()
+	defer crypto.mu.Unlock()
+
+	// Check if this cell is for us by verifying the digest
+	// We maintain a running digest of received data
+	// First, compute what the digest would be if we add this plaintext
+	digestState.Write(plaintext)
+	currentHash := digestState.Sum(nil)
 	var actualDigest [6]byte
-	copy(actualDigest[:], hash[:6])
-	// FIXME: Digest verification fails!
-	// if !bytes.Equal(expectedDigest[:], actualDigest[:]) {
-	// 	return nil, errors.New("digest verification failed")
-	// }
+	copy(actualDigest[:], currentHash[:6])
+
+	if !bytes.Equal(expectedDigest[:], actualDigest[:]) {
+		// Fixed using copilot
+		// Digest mismatch: Need to restore digest state since this cell isn't for us
+		// Re-initialize and replay all cells except this one
+		// For now, we return an error and let DecryptRelayCellAtHop handle it
+		return nil, errors.New("digest mismatch")
+	}
 
 	return plaintext, nil
 }
@@ -424,8 +456,10 @@ func EncryptRelayCellThroughCircuit(
 	return current, digest, nil
 }
 
-// Decrypts a relay cell payload
-// Called by an intermediate or exit node when receiving a relay cell
+// DecryptRelayCellAtHop decrypts a relay cell and checks if it's intended for this hop.
+// Returns the decrypted data and whether the digest matched (indicating this hop is the destination).
+// If digest doesn't match, the cell should be forwarded to the next hop.
+// If expectedDigest is all zeros, digest verification is skipped (for backward direction intermediate hops).
 func DecryptRelayCellAtHop(
 	crypto *CircuitCryptoState,
 	direction Direction,
@@ -435,12 +469,51 @@ func DecryptRelayCellAtHop(
 	plaintext []byte,
 	isForUs bool,
 ) {
-	// Try to decrypt
-	var decryptErr error
-	plaintext, decryptErr = DecryptRelayPayload(crypto, direction, ciphertext, expectedDigest)
-	if decryptErr != nil {
-		// Digest mismatch: this cell is not for us, so just forward it
+	if crypto == nil {
 		return ciphertext, false
+	}
+
+	// Check if digest verification should be skipped (all zeros = skip)
+	// Debugged using copilot
+	var zeroDigest [6]byte
+	skipDigestCheck := bytes.Equal(expectedDigest[:], zeroDigest[:])
+
+	// Select cipher and digest state based on direction
+	var stream cipher.Stream
+	var digestState hash.Hash
+
+	if direction == DirectionForward {
+		stream = crypto.ForwardCipher
+		digestState = crypto.ForwardDigestState
+	} else {
+		stream = crypto.BackwardCipher
+		digestState = crypto.BackwardDigestState
+	}
+
+	// Decrypt the payload using the stateful cipher stream
+	plaintext = make([]byte, len(ciphertext))
+	stream.XORKeyStream(plaintext, ciphertext)
+
+	if skipDigestCheck {
+		// No digest verification needed
+		return plaintext, false
+	}
+
+	// Lock to protect concurrent access to digest state
+	crypto.mu.Lock()
+	defer crypto.mu.Unlock()
+
+	// Verify digest: Check if this cell is for us
+	// We maintain a running digest of received data
+	// Update the running digest with this plaintext
+	digestState.Write(plaintext)
+	currentHash := digestState.Sum(nil)
+	var actualDigest [6]byte
+	copy(actualDigest[:], currentHash[:6])
+
+	if !bytes.Equal(expectedDigest[:], actualDigest[:]) {
+		// Digest mismatch: this cell is not for us
+		return plaintext, false
 	}
 
 	// Digest matched: this cell is for us

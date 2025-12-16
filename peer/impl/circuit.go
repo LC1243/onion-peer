@@ -1,7 +1,6 @@
 package impl
 
 import (
-	"crypto/sha256"
 	"errors"
 	"fmt"
 	"math/rand"
@@ -454,12 +453,6 @@ func (n *node) HandleForwardRelay(cell Cell, circ *Circuit) error {
 		return fmt.Errorf("no crypto state found for circuit %d", circ.InCircID)
 	}
 
-	// Decrypt one layer using our crypto state
-	decryptedData, err := DecryptRelayPayload(cryptoStates[0], DirectionForward, relayCell.Data, relayCell.Digest)
-	if err != nil {
-		return fmt.Errorf("failed to decrypt relay cell data: %w", err)
-	}
-
 	// Hop-by-Hop Flow Control: Intercept circuit-level SENDME (streamID=0) from PrevHop
 	// A SENDME from PrevHop means: "I can receive more cells" → increase our BackwardPackageWindow
 	if n.congestionControl.Load() && relayCell.Command == RelaySendme && relayCell.StreamID == 0 {
@@ -489,18 +482,35 @@ func (n *node) HandleForwardRelay(cell Cell, circ *Circuit) error {
 		return nil // Don't forward circuit-level SENDME
 	}
 
-	if circ.NextHop == "" {
-		// We are the end of the circuit, process the relay command
-		// Replace the encrypted Data with decrypted plaintext
-		relayCell.Data = decryptedData
-		return n.HandleRelayAtEndpoint(relayCell, circ)
+	// Try to decrypt and check if this cell is for this node using digest verification
+	// The digest check determines if this is the intended recipient
+	decryptedData, isForUs := DecryptRelayCellAtHop(cryptoStates[0], DirectionForward, relayCell.Data, relayCell.Digest)
+
+	if isForUs {
+		// Digest matched so, we are the intended destination
+		n.log.Info().
+			Uint16("circID", circ.InCircID).
+			Uint8("command", relayCell.Command).
+			Msg("Digest matched and processing relay command")
+
+		if circ.NextHop == "" {
+			// We are the end of the circuit, process the relay command
+			// Replace the encrypted Data with decrypted plaintext
+			relayCell.Data = decryptedData
+			return n.HandleRelayAtEndpoint(relayCell, circ)
+		}
+		return nil
 	}
 
+	// Digest didn't match so, this cell has to be forwarded
 	n.log.Info().
 		Uint16("circID", circ.InCircID).
 		Str("nextHop", circ.NextHop).
-		Msg("Forwarding Decrypted relay cell to next hop")
+		Msg("Digest mismatch; forwarding relay cell to next hop")
 
+	if circ.NextHop == "" {
+		return fmt.Errorf("digest mismatch but no next hop to forward to")
+	}
 	// We are an intermediate node, forward the decrypted data to NextHop
 
 	// Hop-by-Hop Flow Control: Only count DATA cells towards the window
@@ -524,17 +534,8 @@ func (n *node) HandleForwardRelay(cell Cell, circ *Circuit) error {
 		}
 	}
 
-	// Recompute digest for the decrypted data
-	h := sha256.New()
-	h.Write(cryptoStates[0].ForwardDigest)
-	h.Write(decryptedData)
-	hash := h.Sum(nil)
-	var newDigest [6]byte
-	copy(newDigest[:], hash[:6])
-
-	// Re-encode the relay cell with the decrypted data and new digest
+	// Forward the decrypted data to NextHop
 	relayCell.Data = decryptedData
-	relayCell.Digest = newDigest
 	relayCell.Length = uint16(len(decryptedData))
 	relayCell.CircID = circ.OutCircID
 	forwardCell, err := n.EncodeRelayCell(relayCell)
@@ -1186,15 +1187,14 @@ func (n *node) HandleRelayExtendedAsOP(relayCell RelayCell) error {
 		if len(cryptoStates) == 0 {
 			return fmt.Errorf("no crypto states found for circuit %d", circID)
 		}
-		relayExtendedPayloadPlainText, err := DecryptRelayPayload(
+
+		// Decrypt through guard layer
+		relayExtendedPayloadPlainText, _ := DecryptRelayCellAtHop(
 			cryptoStates[0],
 			DirectionBackward,
 			relayCell.Data,
-			relayCell.Digest,
+			[6]byte{}, // dummy digest as verification in backward direction is not needed
 		)
-		if err != nil {
-			return fmt.Errorf("failed to decrypt relay extended payload for circuit %d: %w", circID, err)
-		}
 
 		// Complete the handshake as the initiator for the Middle node
 		circuitCryptoState, err := n.FinishHandshakeAsInitiator(
@@ -1228,14 +1228,14 @@ func (n *node) HandleRelayExtendedAsOP(relayCell RelayCell) error {
 			cryptoStates[1],
 			DirectionBackward,
 			relayCell.Data,
-			relayCell.Digest,
+			[6]byte{}, // dummy digest
 		)
 
 		relayExtendedPayloadPlainText, _ = DecryptRelayCellAtHop(
 			cryptoStates[0],
 			DirectionBackward,
 			relayExtendedPayloadPlainText,
-			relayCell.Digest,
+			[6]byte{}, // dummy digest
 		)
 
 		// Complete the handshake as the initiator for the Exit node
@@ -2480,21 +2480,14 @@ func (n *node) sendRelaySendmeToHopAsOP(cc *ClientCircuit) error {
 func decryptRelayDataAtClient(cryptoStates []*CircuitCryptoState, encryptedPayload []byte, digest [6]byte) []byte {
 	plainPayload := encryptedPayload
 	for i := range cryptoStates {
-		// FIXME: For us will not work unless digest verification is fixed
-		// It is by chance that the number of hops matches the number of decryptions needed
-		// That is why there is no more loop iterations than the number of hops
-		// So in reality, the for us check is not effective here
-		decrypted, isForUs := DecryptRelayCellAtHop(
+		// Decrypt one layer at a time without digest verification
+		// Only the innermost (original) layer has the meaningful digest
+		plainPayload, _ = DecryptRelayCellAtHop(
 			cryptoStates[i],
 			DirectionBackward,
 			plainPayload,
-			digest,
+			[6]byte{}, // dummy digest
 		)
-		plainPayload = decrypted
-		if !isForUs && i < len(cryptoStates)-1 {
-			// Not for us yet, continue unwrapping
-			continue
-		}
 	}
 	return plainPayload
 }
