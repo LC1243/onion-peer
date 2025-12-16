@@ -49,11 +49,18 @@ const (
 	RelayHSDirLookup      = 18
 	RelayHSDirReply       = 19
 	RelayRPEstablished    = 20 // RP -> Alice (ACK)
+	RelayIntroduceACK     = 21 // Intro Point -> Alice (ACK
 )
 
 // CookieSize Cookie size in bytes for rendezvous points
 const (
 	CookieSize = 20
+)
+
+// Introduce ACK types
+const (
+	IntroduceACKSuccess = 0x01
+	IntroduceACKFail    = 0x02
 )
 
 type Cell struct {

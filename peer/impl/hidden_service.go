@@ -1044,3 +1044,34 @@ func (n *node) GetRendezvousEntriesCount() int {
 	defer n.rendezvousEntryMu.Unlock()
 	return len(n.rendezvousEntries)
 }
+
+// SendIntroduceAck sends an Introduce ACK relay cell to the client indicating success or failure of the introduction
+func (n *node) SendIntroduceAck(circ *Circuit, success bool) error {
+	exitIdx := len(n.circuitCryptoStates[circ.InCircID]) - 1
+	cryptoState := n.circuitCryptoStates[circ.InCircID][exitIdx]
+
+	var flag byte
+	if success {
+		flag = IntroduceACKSuccess
+	} else {
+		flag = IntroduceACKFail
+	}
+	flagPayload, digest, err := EncryptRelayPayload(cryptoState, DirectionBackward, []byte{flag})
+	if err != nil {
+		return err
+	}
+
+	relay := RelayCell{
+		CircID:   circ.InCircID,
+		StreamID: 0,
+		Command:  RelayIntroduceACK,
+		Digest:   digest,
+		Length:   uint16(len(flagPayload)),
+		Data:     flagPayload,
+	}
+	cell, err := n.EncodeRelayCell(relay)
+	if err != nil {
+		return err
+	}
+	return n.SendCell(circ.PrevHop, cell)
+}
