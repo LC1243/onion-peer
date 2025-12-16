@@ -1038,8 +1038,8 @@ func (n *node) HandleRelayEstablishRP(relay RelayCell, circ *Circuit) error {
 	return nil
 }
 
-// GetRendezvousEntryCount implements peer.TorHiddenServices
-func (n *node) GetRendezvousEntryCount() int {
+// GetRendezvousEntriesCount implements peer.TorHiddenServices
+func (n *node) GetRendezvousEntriesCount() int {
 	n.rendezvousEntryMu.Lock()
 	defer n.rendezvousEntryMu.Unlock()
 	return len(n.rendezvousEntries)
