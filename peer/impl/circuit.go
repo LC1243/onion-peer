@@ -152,6 +152,9 @@ type ClientCircuit struct {
 	StatsMu   sync.Mutex // Protects CellCount and IsBulk
 	CellCount float64    // EWMA of cells sent
 	IsBulk    bool       // True if CellCount > Threshold
+
+	// Crypto synchronization
+	CryptoMu sync.Mutex // Protects access to circuitCryptoStates for this circuit
 }
 
 // -----------------------------------------------------------------------------
@@ -255,11 +258,13 @@ func (n *node) HandleCreated(cell Cell, src string) error {
 	if len(cryptoStates) == 0 {
 		return fmt.Errorf("no crypto state found for circuit %d", targetCirc.InCircID)
 	}
+	targetCirc.CryptoMu.Lock()
 	relayPayloadCipherText, digest, err := EncryptRelayPayload(
 		cryptoStates[0],
 		DirectionBackward,
 		cell.Payload[:RelayPayloadLen],
 	)
+	targetCirc.CryptoMu.Unlock()
 
 	if err != nil {
 		return err
@@ -376,7 +381,9 @@ func (n *node) sendRelaySendmeStreamAsOP(cc *ClientCircuit, streamID uint16) err
 		Msg("Sending stream RELAY_SENDME as OP")
 
 	cryptoStates := n.circuitCryptoStates[cc.CircID]
+	cc.CryptoMu.Lock()
 	encrypted, digest, err := EncryptRelayCellThroughCircuit(cryptoStates, []byte{})
+	cc.CryptoMu.Unlock()
 
 	if err != nil {
 		n.log.Error().
@@ -484,7 +491,9 @@ func (n *node) HandleForwardRelay(cell Cell, circ *Circuit) error {
 
 	// Try to decrypt and check if this cell is for this node using digest verification
 	// The digest check determines if this is the intended recipient
+	circ.CryptoMu.Lock()
 	decryptedData, isForUs := DecryptRelayCellAtHop(cryptoStates[0], DirectionForward, relayCell.Data, relayCell.Digest)
+	circ.CryptoMu.Unlock()
 
 	if isForUs {
 		// Digest matched so, we are the intended destination
@@ -667,11 +676,13 @@ func (n *node) HandleBackwardRelay(cell Cell, circ *Circuit) error {
 	}
 
 	// Encrypt one layer using our crypto state (adding a layer of encryption)
+	circ.CryptoMu.Lock()
 	encryptedData, digest, err := EncryptRelayPayload(
 		cryptoStates[0],
 		DirectionBackward,
 		relayCell.Data,
 	)
+	circ.CryptoMu.Unlock()
 	if err != nil {
 		n.log.Error().
 			Err(err).
@@ -1189,12 +1200,14 @@ func (n *node) HandleRelayExtendedAsOP(relayCell RelayCell) error {
 		}
 
 		// Decrypt through guard layer
+		cc.CryptoMu.Lock()
 		relayExtendedPayloadPlainText, _ := DecryptRelayCellAtHop(
 			cryptoStates[0],
 			DirectionBackward,
 			relayCell.Data,
 			[6]byte{}, // dummy digest as verification in backward direction is not needed
 		)
+		cc.CryptoMu.Unlock()
 
 		// Complete the handshake as the initiator for the Middle node
 		circuitCryptoState, err := n.FinishHandshakeAsInitiator(
@@ -2247,7 +2260,9 @@ func (n *node) SendStreamData(circID, streamID uint16, data []byte) error {
 	}
 
 	// Encrypt and send data
+	cc.CryptoMu.Lock()
 	err = n.encryptAndSendRelayData(circID, streamID, data, cryptoStates, cc.Hops[0])
+	cc.CryptoMu.Unlock()
 	if err != nil {
 		return err
 	}
@@ -2650,7 +2665,9 @@ func (n *node) HandleRelayDataAsOP(relay RelayCell, cc *ClientCircuit) error {
 	}
 
 	// Decrypt the payload through all hops
+	cc.CryptoMu.Lock()
 	plainPayload := decryptRelayDataAtClient(cryptoStates, relay.Data, relay.Digest)
+	cc.CryptoMu.Unlock()
 
 	// Store the decrypted data for testing
 	storeReceivedData(stream, plainPayload)
