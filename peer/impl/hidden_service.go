@@ -957,6 +957,7 @@ func (n *node) DeleteHiddenService(serviceID string, circID uint16) error {
 		return fmt.Errorf("hidden service %s not found", serviceID)
 	}
 
+	// the lifetime doesn't matter, since we are deleting the descriptor from the lookup service
 	err := n.DeleteDescriptorFromHSDir(serviceID, circID, 5*time.Second)
 	if err != nil {
 		return err
