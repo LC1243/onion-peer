@@ -428,12 +428,22 @@ func (n *node) HandleForwardRelay(cell Cell, circ *Circuit) error {
 	}
 
 	// Digest didn't match so, this cell has to be forwarded
+	n.SecurityStats.mu.Lock()
+	n.SecurityStats.DigestMismatches++
+	n.SecurityStats.RelayDigestMismatches++
+	n.SecurityStats.mu.Unlock()
+
 	n.log.Info().
 		Uint16("circID", circ.InCircID).
 		Str("nextHop", circ.NextHop).
 		Msg("Digest mismatch; forwarding relay cell to next hop")
 
 	if circ.NextHop == "" {
+		n.SecurityStats.mu.Lock()
+		n.SecurityStats.DroppedCells++
+		n.SecurityStats.DroppedDigestMismatch++
+		n.SecurityStats.DroppedNoNextHop++
+		n.SecurityStats.mu.Unlock()
 		return fmt.Errorf("digest mismatch but no next hop to forward to")
 	}
 	// We are an intermediate node, forward the decrypted data to NextHop

@@ -15,6 +15,7 @@ type Peer interface {
 	Tor
 	TorStreams
 	TorHiddenServices
+	TorSecurity
 }
 
 // Tor defines the interface for Tor-like onion routing functionality.
@@ -127,6 +128,30 @@ type TorHiddenServices interface {
 
 	// SetPeerAsHSDir sets the flag to indicate if the peer should act as a lookup server
 	SetPeerAsHSDir(value bool)
+}
+
+// Provides methods for security profiling and testing
+type TorSecurity interface {
+	// GetDigestMismatches returns the total number of digest mismatches detected
+	GetDigestMismatches() uint64
+
+	// GetRelayDigestMismatches returns digest mismatches on relay cells (forwarded)
+	GetRelayDigestMismatches() uint64
+
+	// GetDroppedCells returns the total number of cells dropped due to errors
+	GetDroppedCells() uint64
+
+	// GetDroppedDigestMismatch returns cells dropped specifically due to digest mismatch
+	GetDroppedDigestMismatch() uint64
+
+	// GetDroppedNoNextHop returns cells dropped because no next hop available
+	GetDroppedNoNextHop() uint64
+
+	// GetDroppedDecryptionFail returns cells dropped due to decryption failure
+	GetDroppedDecryptionFail() uint64
+
+	// ResetSecurityStats resets all security statistics to zero
+	ResetSecurityStats()
 }
 
 // Factory is the type of function we are using to create new instances of

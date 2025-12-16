@@ -187,6 +187,9 @@ type node struct {
 	// Test hooks for security testing
 	TestCellInterceptor func(*Cell) // Function hook called before sending a cell to potentially modify it
 	TestInterceptorMu   sync.RWMutex
+
+	// Security statistics for profiling and testing
+	SecurityStats SecurityStats
 }
 
 // Start implements peer.Service
