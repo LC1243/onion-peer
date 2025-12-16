@@ -6,7 +6,7 @@ import (
 	"crypto/cipher"
 	"crypto/rand"
 	"crypto/rsa"
-	"crypto/sha1"
+	"crypto/sha1" //nolint:gosec
 	"crypto/sha256"
 	"errors"
 	"fmt"
@@ -291,10 +291,10 @@ func generateCircuitKeys(sharedSecret []byte) (*CircuitCryptoState, error) {
 	}
 
 	// Initialize running digest states with the digest keys
-	forwardDigest := sha1.New()
+	forwardDigest := sha1.New() //nolint:gosec
 	forwardDigest.Write(forwardDigestKey)
 
-	backwardDigest := sha1.New()
+	backwardDigest := sha1.New() //nolint:gosec
 	backwardDigest.Write(backwardDigestKey)
 
 	return &CircuitCryptoState{
