@@ -1075,3 +1075,40 @@ func (n *node) SendIntroduceAck(circ *Circuit, success bool) error {
 	}
 	return n.SendCell(circ.PrevHop, cell)
 }
+
+// HandleRelayIntroduceACK handles the Introduce ACK relay cell sent by the IP to the client
+func (n *node) HandleRelayIntroduceACK(relay RelayCell) error {
+	if relay.Data == nil || len(relay.Data) < 1 {
+		return fmt.Errorf("invalid introduce ACK payload")
+	}
+
+	// Check if the introduction was successful
+	var success bool
+	flag := relay.Data[0]
+	switch flag {
+	case IntroduceACKSuccess:
+		success = true
+	case IntroduceACKFail:
+		success = false
+	default:
+		return fmt.Errorf("unknown introduce ACK flag %d", flag)
+	}
+
+	n.introAckMu.Lock()
+	ackCh := n.introAckCh[relay.CircID]
+	if ackCh == nil {
+		n.introAckMu.Unlock()
+		return nil // no one is waiting for this ACK, ignore
+	}
+	n.introAckSuccess[relay.CircID] = success
+	close(ackCh)
+	delete(n.introAckCh, relay.CircID)
+	n.introAckMu.Unlock()
+
+	n.log.Info().
+		Uint16("circID", relay.CircID).
+		Bool("success", success).
+		Msg("Introduce ACK received")
+
+	return nil
+}

@@ -480,6 +480,8 @@ func (n *node) HandleRelayAtEndpoint(relayCell RelayCell, circ *Circuit) error {
 		return n.HandleRelayHSDirLookup(relayCell, circ)
 	case RelayEstablishRP:
 		return n.HandleRelayEstablishRP(relayCell, circ)
+	case RelayIntroduceACK:
+		return n.HandleRelayIntroduceACK(relayCell)
 	default:
 		return fmt.Errorf("unknown relay command %d", relayCell.Command)
 	}

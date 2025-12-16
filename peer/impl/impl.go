@@ -168,6 +168,10 @@ type node struct {
 	rendezvousEntryMu sync.Mutex
 	rendezvousEntries map[string]uint16 // cookie -> circID
 
+	introAckMu      sync.Mutex
+	introAckCh      map[uint16]chan uint8 // circID -> done
+	introAckSuccess map[uint16]bool       // circID -> success/fail
+
 	// IsHiddenServiceDir indicates whether the peer acts as a directory for hidden services
 	// so that multiple peers can look up for services.
 	// Default: false
