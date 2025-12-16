@@ -92,7 +92,14 @@ func (n *node) EstablishIntroPoint(serviceID string, circID uint16, timeout time
 		return fmt.Errorf("no crypto state for circ %d", circID)
 	}
 
+	cc, ok := n.clientCircuits[circID]
+	if !ok {
+		return fmt.Errorf("not a client circuit %d", circID)
+	}
+
+	cc.CryptoMu.Lock()
 	encrypted, digest, err := EncryptRelayCellThroughCircuit(cryptoStates, payload)
+	cc.CryptoMu.Unlock()
 	if err != nil {
 		return err
 	}
@@ -108,11 +115,6 @@ func (n *node) EstablishIntroPoint(serviceID string, circID uint16, timeout time
 	cell, err := n.EncodeRelayCell(relay)
 	if err != nil {
 		return err
-	}
-
-	_, ok = n.clientCircuits[circID]
-	if !ok {
-		return fmt.Errorf("not a client circuit %d", circID)
 	}
 
 	return n.SendAndWaitForIntroReply(circID, serviceID, cell, timeout)
@@ -519,8 +521,15 @@ func (n *node) PublishDescriptorToHSDir(serviceID string,
 		return err
 	}
 
+	cc, ok := n.clientCircuits[circID]
+	if !ok {
+		return fmt.Errorf("unknown client circuit %d", circID)
+	}
+
 	cryptoStates := n.circuitCryptoStates[circID]
+	cc.CryptoMu.Lock()
 	encrypted, digest, err := EncryptRelayCellThroughCircuit(cryptoStates, payload)
+	cc.CryptoMu.Unlock()
 	if err != nil {
 		return err
 	}
@@ -535,8 +544,6 @@ func (n *node) PublishDescriptorToHSDir(serviceID string,
 	if err != nil {
 		return err
 	}
-
-	cc := n.clientCircuits[circID]
 
 	n.log.Info().
 		Str("serviceID", serviceID).
@@ -577,10 +584,12 @@ func (n *node) LookupDescriptorViaHSDir(circID uint16, serviceID string, timeout
 		return nil, fmt.Errorf("no crypto states for circuit %d", circID)
 	}
 
+	cc.CryptoMu.Lock()
 	encrypted, digest, err := EncryptRelayCellThroughCircuit(
 		cryptoStates,
 		[]byte(serviceID),
 	)
+	cc.CryptoMu.Unlock()
 	if err != nil {
 		return nil, err
 	}
@@ -666,7 +675,14 @@ func (n *node) HandleRelayHSDirReply(relay RelayCell) error {
 		return fmt.Errorf("no crypto states for circuit %d", relay.CircID)
 	}
 
+	cc := n.clientCircuits[relay.CircID]
+	if cc == nil {
+		return fmt.Errorf("no client circuit for %d", relay.CircID)
+	}
+
+	cc.CryptoMu.Lock()
 	plaintext := decryptRelayDataAtClient(cryptoStates, relay.Data, relay.Digest)
+	cc.CryptoMu.Unlock()
 
 	desc, err := DecodeServiceDescriptor(plaintext)
 	if err != nil {

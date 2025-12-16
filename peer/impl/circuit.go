@@ -1239,6 +1239,7 @@ func (n *node) HandleRelayExtendedAsOP(relayCell RelayCell) error {
 		}
 
 		// Decrypt through middle and guard layers to get exit's handshake response
+		cc.CryptoMu.Lock()
 		relayExtendedPayloadPlainText, _ := DecryptRelayCellAtHop(
 			cryptoStates[1],
 			DirectionBackward,
@@ -1252,6 +1253,7 @@ func (n *node) HandleRelayExtendedAsOP(relayCell RelayCell) error {
 			relayExtendedPayloadPlainText,
 			[6]byte{}, // dummy digest
 		)
+		cc.CryptoMu.Unlock()
 
 		// Complete the handshake as the initiator for the Exit node
 		circuitCryptoState, err := n.FinishHandshakeAsInitiator(
@@ -1405,7 +1407,10 @@ func (n *node) SendRelayEndAsClient(circID, streamID uint16) error {
 		Msg("Sending RelayEnd as client")
 
 	cryptoStates := n.circuitCryptoStates[circID]
+	cc := n.clientCircuits[circID]
+	cc.CryptoMu.Lock()
 	encrypted, digest, err := EncryptRelayCellThroughCircuit(cryptoStates, []byte{})
+	cc.CryptoMu.Unlock()
 
 	if err != nil {
 		n.log.Error().
@@ -1426,7 +1431,6 @@ func (n *node) SendRelayEndAsClient(circID, streamID uint16) error {
 	}
 
 	cell, _ := n.EncodeRelayCell(relayCell)
-	cc := n.clientCircuits[circID]
 	n.log.Info().
 		Uint16("circID", circID).
 		Uint16("streamID", streamID).
@@ -1482,7 +1486,9 @@ func (n *node) SendExtendToHop(cc *ClientCircuit, nextHop string) error {
 	}
 
 	// Apply onion encryption: encrypt with each hop's key in reverse order
+	cc.CryptoMu.Lock()
 	encryptedPayload, digest, err := EncryptRelayCellThroughCircuit(cryptoStates, payloadBuf)
+	cc.CryptoMu.Unlock()
 	if err != nil {
 		return fmt.Errorf("failed to encrypt relay cell: %w", err)
 	}
@@ -1694,7 +1700,7 @@ func (n *node) OpenStream(circID uint16, targetAddr string) (uint16, error) {
 	n.createAndAddStream(circID, streamID, targetAddr)
 
 	// Send RELAY_BEGIN cell
-	if err := n.sendRelayBegin(circID, streamID, targetAddr, cryptoStates, cc.Hops[0]); err != nil {
+	if err := n.sendRelayBegin(circID, streamID, targetAddr, cryptoStates, cc); err != nil {
 		return 0, err
 	}
 
@@ -1768,7 +1774,7 @@ func (n *node) sendRelayBegin(
 	circID, streamID uint16,
 	targetAddr string,
 	cryptoStates []*CircuitCryptoState,
-	guardAddr string,
+	cc *ClientCircuit,
 ) error {
 	n.log.Info().
 		Uint16("circID", circID).
@@ -1776,7 +1782,9 @@ func (n *node) sendRelayBegin(
 		Msg("Encrypting RELAY_BEGIN payload")
 
 	plainPayload := []byte(targetAddr)
+	cc.CryptoMu.Lock()
 	encryptedPayload, digest, err := EncryptRelayCellThroughCircuit(cryptoStates, plainPayload)
+	cc.CryptoMu.Unlock()
 	if err != nil {
 		n.log.Error().
 			Err(err).
@@ -1808,16 +1816,16 @@ func (n *node) sendRelayBegin(
 	n.log.Info().
 		Uint16("circID", circID).
 		Uint16("streamID", streamID).
-		Str("guard", guardAddr).
+		Str("guard", cc.Hops[0]).
 		Msg("Sending RELAY_BEGIN to guard")
 
-	err = n.SendCell(guardAddr, cell)
+	err = n.SendCell(cc.Hops[0], cell)
 	if err != nil {
 		n.log.Error().
 			Err(err).
 			Uint16("circID", circID).
 			Uint16("streamID", streamID).
-			Str("guard", guardAddr).
+			Str("guard", cc.Hops[0]).
 			Msg("Failed to send RELAY_BEGIN to guard")
 		return fmt.Errorf("failed to send RELAY_BEGIN to guard: %w", err)
 	}
@@ -1854,7 +1862,7 @@ func (n *node) transitionStreamToHalfClosed(circID, streamID uint16) {
 func (n *node) encryptAndSendRelayEnd(
 	circID, streamID uint16,
 	cryptoStates []*CircuitCryptoState,
-	guardAddr string,
+	cc *ClientCircuit,
 ) error {
 	n.log.Info().
 		Uint16("circID", circID).
@@ -1862,7 +1870,9 @@ func (n *node) encryptAndSendRelayEnd(
 		Msg("Encrypting RELAY_END payload")
 
 	// empty payload for now
+	cc.CryptoMu.Lock()
 	encryptedPayload, digest, err := EncryptRelayCellThroughCircuit(cryptoStates, []byte{})
+	cc.CryptoMu.Unlock()
 	if err != nil {
 		n.log.Error().
 			Err(err).
@@ -1894,10 +1904,10 @@ func (n *node) encryptAndSendRelayEnd(
 	n.log.Info().
 		Uint16("circID", circID).
 		Uint16("streamID", streamID).
-		Str("guard", guardAddr).
+		Str("guard", cc.Hops[0]).
 		Msg("Sending RELAY_END to guard")
 
-	err = n.SendCell(guardAddr, cell)
+	err = n.SendCell(cc.Hops[0], cell)
 	if err != nil {
 		n.log.Error().
 			Err(err).
@@ -1948,7 +1958,7 @@ func (n *node) CloseStream(circID, streamID uint16) error {
 	}
 
 	// Encrypt and send RELAY_END
-	return n.encryptAndSendRelayEnd(circID, streamID, cryptoStates, cc.Hops[0])
+	return n.encryptAndSendRelayEnd(circID, streamID, cryptoStates, cc)
 }
 
 // GetCircuitsNbr returns the number of relay circuits (for testing)
