@@ -41,7 +41,7 @@ func (t *Transport) CreateSocket(address string) (transport.ClosableSocket, erro
 		port := atomic.AddUint32(&counter, 1)
 		address = fmt.Sprintf("%s:%d", address, port)
 	}
-	t.incomings[address] = make(chan transport.Packet, 100)
+	t.incomings[address] = make(chan transport.Packet, 2000)
 	t.Unlock()
 
 	return &Socket{

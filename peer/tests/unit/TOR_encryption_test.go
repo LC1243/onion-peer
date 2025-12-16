@@ -40,7 +40,7 @@ func Test_TOR_KeyPopulation(t *testing.T) {
 	}
 
 	// Populate keys
-	populateOnionKeys(nodes)
+	z.PopulateOnionKeys(nodes)
 
 	// Verify each node has keys for all other nodes
 	for i, node := range nodes {
@@ -74,6 +74,6 @@ func Test_TOR_KeyPopulation_WithNilKey(t *testing.T) {
 
 	// This should not panic even if some nodes don't have keys
 	require.NotPanics(t, func() {
-		populateOnionKeys(nodes)
+		z.PopulateOnionKeys(nodes)
 	}, "populateOnionKeys should handle missing keys gracefully")
 }

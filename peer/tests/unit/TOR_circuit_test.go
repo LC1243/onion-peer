@@ -1,36 +1,12 @@
 package unit
 
 import (
-	"crypto/rsa"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 	z "go.dedis.ch/cs438/internal/testing"
 )
-
-// populateOnionKeys distributes all nodes' public onion keys to all other nodes.
-// This simulates a key distribution mechanism (e.g., a directory service).
-// Call this after all nodes have been created and started.
-func populateOnionKeys(nodes []z.TestNode) {
-	for i, node := range nodes {
-		pubKeyInterface := node.Peer.GetOnionPublicKey()
-		if pubKeyInterface == nil {
-			continue
-		}
-		pubKey, ok := pubKeyInterface.(*rsa.PublicKey)
-		if !ok {
-			continue
-		}
-
-		// Add this node's public key to all other nodes
-		for j, otherNode := range nodes {
-			if i != j {
-				otherNode.Peer.AddPeerOnionKey(node.GetAddr(), pubKey)
-			}
-		}
-	}
-}
 
 // Test_TOR_Circuit_Create_Simple tests that a single Create/Created handshake works
 func Test_TOR_Circuit_Create_Simple(t *testing.T) {
@@ -87,7 +63,7 @@ func Test_TOR_Circuit_BuildCircuit_ThreeHops(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Populate onion public keys for all nodes
-	populateOnionKeys(nodes)
+	z.PopulateOnionKeys(nodes)
 
 	hops := [3]string{guard.GetAddr(), middle.GetAddr(), exit.GetAddr()}
 
@@ -151,7 +127,7 @@ func Test_TOR_Circuit_MultipleCircuits(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Populate onion public keys for all nodes
-	populateOnionKeys(nodes)
+	z.PopulateOnionKeys(nodes)
 
 	hops := [3]string{guard.GetAddr(), middle.GetAddr(), exit.GetAddr()}
 
@@ -211,7 +187,7 @@ func Test_TOR_Circuit_Destroy_ClientInitiated_Success(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Populate onion public keys for all nodes
-	populateOnionKeys(nodes)
+	z.PopulateOnionKeys(nodes)
 
 	hops := [3]string{guard.GetAddr(), middle.GetAddr(), exit.GetAddr()}
 
@@ -276,7 +252,7 @@ func Test_TOR_Circuit_Destroy_RelayInitiated_Success(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Populate onion public keys for all nodes
-	populateOnionKeys(nodes)
+	z.PopulateOnionKeys(nodes)
 
 	hops := [3]string{guard.GetAddr(), middle.GetAddr(), exit.GetAddr()}
 
@@ -357,8 +333,8 @@ func Test_TOR_Circuit_Cleanup_ClientInitiated_Success(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Populate onion public keys for all nodes
-	populateOnionKeys(nodes1)
-	populateOnionKeys(nodes2)
+	z.PopulateOnionKeys(nodes1)
+	z.PopulateOnionKeys(nodes2)
 
 	hops1 := [3]string{guard1.GetAddr(), middle.GetAddr(), exit1.GetAddr()}
 	hops2 := [3]string{guard2.GetAddr(), middle.GetAddr(), exit2.GetAddr()}
@@ -393,4 +369,82 @@ func Test_TOR_Circuit_Cleanup_ClientInitiated_Success(t *testing.T) {
 	require.Equal(t, 0, middle.Peer.GetCircuitsNbr(), "middle should have 0 relay circuit")
 	require.Equal(t, 0, exit1.Peer.GetCircuitsNbr(), "exit1 should have 0 relay circuit")
 	require.Equal(t, 0, exit2.Peer.GetCircuitsNbr(), "exit2 should have 0 relay circuit")
+}
+
+// Test_TOR_Congestion_NoPacketLoss tests that a circuit can handle sending >1000 cells
+// without dropping them due to buffer issues, thanks to the window mechanism (RELAY_SENDME), and the rate limiting.
+func Test_TOR_Congestion_NoPacketLoss(t *testing.T) {
+	transp := channelFac()
+
+	// Create 4 nodes: client + 3 relays (guard, middle, exit)
+	client := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer client.Stop()
+
+	guard := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer guard.Stop()
+
+	middle := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer middle.Stop()
+
+	exit := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer exit.Stop()
+
+	nodes := []z.TestNode{client, guard, middle, exit}
+
+	// Full mesh connectivity
+	for i, n1 := range nodes {
+		for j, n2 := range nodes {
+			if i != j {
+				n1.AddPeer(n2.GetAddr())
+			}
+		}
+	}
+	time.Sleep(100 * time.Millisecond)
+
+	// Populate onion keys
+	z.PopulateOnionKeys(nodes)
+
+	// Build circuit
+	hops := [3]string{guard.GetAddr(), middle.GetAddr(), exit.GetAddr()}
+	circID, err := client.BuildCircuit(hops, 10*time.Second)
+	require.NoError(t, err, "Failed to build circuit")
+
+	// Open stream
+	streamID, err := client.OpenStream(circID, "dummy:1234")
+	require.NoError(t, err, "Failed to open stream")
+
+	// Send 3000 cells through the circuit
+	numCells := 3000
+	payload := []byte("cell-data")
+
+	// Send cells with pacing to avoid UDP buffer overflow
+	go func() {
+		// Wait for stream to be fully open
+		time.Sleep(500 * time.Millisecond)
+
+		for i := 0; i < numCells; i++ {
+			err := client.SendStreamData(circID, streamID, payload)
+			require.NoError(t, err, "Failed to send cell %d", i)
+			time.Sleep(1 * time.Millisecond) // Pacing to avoid buffer issues
+		}
+	}()
+
+	// Wait for all cells to be received
+	timeout := time.After(30 * time.Second)
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-timeout:
+			t.Fatal("Timeout waiting for all cells to be received")
+		case <-ticker.C:
+			pkts, err := client.GetReceivedStreamPackets(circID, streamID)
+			if err == nil && len(pkts) >= numCells {
+				// Successfully received all cells
+				require.Equal(t, numCells, len(pkts), "Should receive exactly %d cells", numCells)
+				return
+			}
+		}
+	}
 }
