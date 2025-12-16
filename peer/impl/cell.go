@@ -49,7 +49,8 @@ const (
 	RelayHSDirLookup      = 18
 	RelayHSDirReply       = 19
 	RelayRPEstablished    = 20 // RP -> Alice (ACK)
-	RelayIntroduceACK     = 21 // Intro Point -> Alice (ACK
+	RelayIntroduceACK     = 21 // Intro Point -> Alice (ACK)
+	RelayIntroduce2       = 22 // RP -> Bob (intro message)
 )
 
 // CookieSize Cookie size in bytes for rendezvous points

@@ -1354,3 +1354,28 @@ func (n *node) SendIntroduce1Message(circID uint16, serviceID string,
 
 	return n.SendCell(n.clientCircuits[circID].Hops[0], cell)
 }
+
+// SendIntroduce2Message sends an introduce2 message to the hidden service from the introduction point
+func (n *node) SendIntroduce2Message(circ *Circuit, encryptedBlob []byte) error {
+	exitIdx := len(n.circuitCryptoStates[circ.InCircID]) - 1
+	cryptoState := n.circuitCryptoStates[circ.InCircID][exitIdx]
+
+	payload, digest, err := EncryptRelayPayload(cryptoState, DirectionBackward, encryptedBlob)
+	if err != nil {
+		return err
+	}
+
+	relay := RelayCell{
+		CircID:   circ.InCircID,
+		StreamID: 0,
+		Command:  RelayIntroduce2,
+		Digest:   digest,
+		Length:   uint16(len(payload)),
+		Data:     payload,
+	}
+	cell, err := n.EncodeRelayCell(relay)
+	if err != nil {
+		return err
+	}
+	return n.SendCell(circ.PrevHop, cell)
+}
