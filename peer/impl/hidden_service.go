@@ -1266,3 +1266,91 @@ func DecodeIPIntroduceMessage(data []byte) (*IPIntroduceMessage, error) {
 		EncryptedBlob: encryptedBlob,
 	}, nil
 }
+
+// SendIntroduce1Message sends an introduce1 message to the introduction point for the specified service
+func (n *node) SendIntroduce1Message(circID uint16, serviceID string,
+	servicePubKey []byte, cookie [CookieSize]byte, rendezvousAddr string) error {
+	if len(servicePubKey) == 0 {
+		return fmt.Errorf("service public key is required")
+	}
+	if len(serviceID) == 0 {
+		return fmt.Errorf("service ID is required")
+	}
+
+	// Check that the circuit is ready
+	n.clientCircuitsMu.Lock()
+	cc, exists := n.clientCircuits[circID]
+	if !exists {
+		n.clientCircuitsMu.Unlock()
+		return fmt.Errorf("unknown client circuit %d", circID)
+	}
+	if cc.State != CircuitStateReady {
+		n.clientCircuitsMu.Unlock()
+		return fmt.Errorf("circuit %d not ready (state: %d)", circID, cc.State)
+	}
+	n.clientCircuitsMu.Unlock()
+
+	// Get crypto states for the circuit
+	cryptoStates := n.circuitCryptoStates[circID]
+	if len(cryptoStates) == 0 {
+		return fmt.Errorf("no crypto states for circuit %d", circID)
+	}
+
+	// Prepare the ServiceIntroduceMessage for the service
+	selfPubKey := n.onionKey.Public
+	stringSelfPubKey := x509.MarshalPKCS1PublicKey(selfPubKey)
+	serviceIntroMsg := &ServiceIntroduceMessage{
+		Cookie:      cookie,
+		RPAddr:      rendezvousAddr,
+		ClientDHPub: stringSelfPubKey,
+	}
+	servicePayload, err := EncodeServiceIntroduceMessage(serviceIntroMsg)
+	if err != nil {
+		return fmt.Errorf("failed to encode service introduce message: %w", err)
+	}
+
+	// Encrypt the ServiceIntroduceMessage with the service public key
+	rsaServicePubKey, err := x509.ParsePKCS1PublicKey(servicePubKey)
+	if err != nil {
+		return fmt.Errorf("failed to parse service public key: %w", err)
+	}
+	encryptedPayload, err := rsa.EncryptOAEP(sha256.New(), rand.Reader, rsaServicePubKey, servicePayload, nil)
+	if err != nil {
+		return fmt.Errorf("failed to encrypt payload: %w", err)
+	}
+
+	// Prepare the IPIntroduceMessage for the introduction point
+	ipIntroMsg := &IPIntroduceMessage{
+		ServiceID:     serviceID,
+		EncryptedBlob: encryptedPayload,
+	}
+	ipPayload, err := EncodeIPIntroduceMessage(ipIntroMsg)
+	if err != nil {
+		return fmt.Errorf("failed to encode IP introduce message: %w", err)
+	}
+
+	encrypted, digest, err := EncryptRelayCellThroughCircuit(cryptoStates, ipPayload)
+	if err != nil {
+		return fmt.Errorf("failed to encrypt relay cell: %w", err)
+	}
+
+	relay := RelayCell{
+		CircID:   circID,
+		StreamID: 0,
+		Command:  RelayIntroduce1,
+		Digest:   digest,
+		Length:   uint16(len(encrypted)),
+		Data:     encrypted,
+	}
+	cell, err := n.EncodeRelayCell(relay)
+	if err != nil {
+		return fmt.Errorf("failed to encode relay cell: %w", err)
+	}
+
+	n.log.Info().
+		Uint16("circID", circID).
+		Str("serviceID", serviceID).
+		Msg("Sending introduce message to introduction point")
+
+	return n.SendCell(n.clientCircuits[circID].Hops[0], cell)
+}
