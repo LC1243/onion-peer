@@ -295,7 +295,7 @@ func Test_TOR_FlowControl_Enabled_NoPacketLoss(t *testing.T) {
 
 	// Send many packets - with flow control, this should block when windows are full
 	// rather than losing packets. Use fewer packets to speed up the test.
-	numPackets := 1200 // Just above window size of 1000
+	numPackets := 5000
 	payload := []byte("data-with-flow-control")
 
 	// Send packets in a goroutine (will block on flow control)
