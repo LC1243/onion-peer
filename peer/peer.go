@@ -131,6 +131,9 @@ type TorHiddenServices interface {
 
 	// SetPeerAsHSDir sets the flag to indicate if the peer should act as a lookup server
 	SetPeerAsHSDir(value bool)
+
+	// GetRendezvousCount returns the number of active rendezvous points managed by the peer.
+	GetRendezvousCount() int
 }
 
 // Factory is the type of function we are using to create new instances of
