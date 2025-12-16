@@ -1352,12 +1352,17 @@ func (n *node) SendIntroduce1Message(circID uint16, serviceID string,
 		return fmt.Errorf("failed to encode relay cell: %w", err)
 	}
 
+	err = n.SendCell(n.clientCircuits[circID].Hops[0], cell)
+	if err != nil {
+		return fmt.Errorf("failed to send cell: %w", err)
+	}
+
 	n.log.Info().
 		Uint16("circID", circID).
 		Str("serviceID", serviceID).
-		Msg("Sending introduce message to introduction point")
+		Msg("Sent introduce1 message to introduction point")
 
-	return n.SendCell(n.clientCircuits[circID].Hops[0], cell)
+	return nil
 }
 
 // SendIntroduce2Message sends an introduce2 message to the hidden service from the introduction point
@@ -1459,4 +1464,50 @@ func (n *node) HandleRelayIntroduce1(relay RelayCell, circ *Circuit) error {
 		Str("serviceID", ipIntroMsg.ServiceID).
 		Msg("Sent introduce ACK to client")
 	return nil
+}
+
+// SendIntroduce1AndWaitForACK sends an introduce1 message and waits for the ACK response
+func (n *node) SendIntroduce1AndWaitForACK(circID uint16, serviceID string,
+	servicePubKey []byte, cookie [CookieSize]byte, rendezvousAddr string, timeout time.Duration) error {
+	n.introAckMu.Lock()
+	ackCh := make(chan struct{})
+	n.introAckCh[circID] = ackCh
+	n.introAckSuccess[circID] = false
+	n.introAckMu.Unlock()
+
+	err := n.SendIntroduce1Message(circID, serviceID, servicePubKey, cookie, rendezvousAddr)
+	if err != nil {
+		n.introAckMu.Lock()
+		delete(n.introAckCh, circID)
+		delete(n.introAckSuccess, circID)
+		n.introAckMu.Unlock()
+		return fmt.Errorf("failed to send introduce1 message: %w", err)
+	}
+
+	select {
+	case <-ackCh:
+		n.introAckMu.Lock()
+		success := n.introAckSuccess[circID]
+		delete(n.introAckSuccess, circID)
+		n.introAckMu.Unlock()
+		if success {
+			n.log.Info().
+				Uint16("circID", circID).
+				Str("serviceID", serviceID).
+				Msg("Introduce ACK received: success")
+			return nil
+		} else {
+			n.log.Info().
+				Uint16("circID", circID).
+				Str("serviceID", serviceID).
+				Msg("Introduce ACK received: failure")
+			return fmt.Errorf("introduction failed according to ACK")
+		}
+	case <-time.After(timeout):
+		n.introAckMu.Lock()
+		delete(n.introAckCh, circID)
+		delete(n.introAckSuccess, circID)
+		n.introAckMu.Unlock()
+		return fmt.Errorf("introduce ACK timed out")
+	}
 }
