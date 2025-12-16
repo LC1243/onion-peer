@@ -51,6 +51,7 @@ func NewPeer(conf peer.Configuration) peer.Peer {
 	n.circuits = make(map[circuitKey]*Circuit)
 	n.clientCircuits = make(map[uint16]*ClientCircuit)
 	n.streamTables = make(map[uint16]*CircuitStreams)
+	n.pendingStreams = make(map[uint16]map[uint16]*Stream)
 	n.congestionControl = true
 	// Initialize rate limiting token buckets
 	n.writeBucket = NewTokenBucket(DefaultRate, DefaultCapacity)
@@ -142,6 +143,10 @@ type node struct {
 	// streamTables[circID] = CircuitStreams
 	streamsMu    sync.RWMutex
 	streamTables map[uint16]*CircuitStreams
+
+	// Stores streams waiting for RELAY_CONNECTED
+	pendingStreamsMu sync.RWMutex
+	pendingStreams   map[uint16]map[uint16]*Stream
 
 	// Congestion control toggle
 	congestionControl bool
