@@ -556,3 +556,62 @@ func Test_TOR_HS_Delete_HiddenService_NotFound(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "not found")
 }
+
+// Test_TOR_HS_PrepareRendezvousPoint_Succeeds tests preparing a rendezvous point for a hidden service and
+// expect it to succeed
+func Test_TOR_HS_PrepareRendezvousPoint_Succeeds(t *testing.T) {
+	client, guard, middle, exit, circID := Build3HopCircuit(t)
+
+	time.Sleep(100 * time.Millisecond) // Ensure all nodes are ready
+
+	// Check initial packet counts
+	clientSentBefore := len(client.GetOuts())
+	exitRecvBefore := len(exit.GetIns())
+	exitSentBefore := len(exit.GetOuts())
+
+	serviceID := uint16(42)
+	cookie, err := client.Peer.PrepareRendezvousPoint(serviceID, circID, 2*time.Second)
+
+	// Check packet counts after
+	clientSentAfter := len(client.GetOuts())
+	exitRecvAfter := len(exit.GetIns())
+	exitSentAfter := len(exit.GetOuts())
+
+	// Client should have sent exactly 1 packet
+	require.Equal(t, clientSentBefore+1, clientSentAfter, "Client should have sent 1 packet")
+
+	// Exit should have received exactly 1 packet and sent exactly 1 packet
+	require.Equal(t, exitRecvBefore+1, exitRecvAfter, "Exit should have received 1 packet")
+	require.Equal(t, exitSentBefore+1, exitSentAfter, "Exit should have sent 1 packet")
+
+	// Should succeed and return a non-empty cookie
+	require.NoError(t, err)
+	require.NotEqual(t, [20]byte{}, cookie, "Cookie should not be empty")
+
+	// Exit node should have one rendezvous point recorded
+	exitEntriesCount := exit.Peer.GetRendezvousEntriesCount()
+	require.Equal(t, 1, exitEntriesCount, "Exit should have 1 rendezvous point")
+
+	// Guard and middle nodes should have no rendezvous points recorded
+	guardEntriesCount := guard.Peer.GetRendezvousEntriesCount()
+	require.Equal(t, 0, guardEntriesCount, "Guard should have 0 rendezvous points")
+	middleEntriesCount := middle.Peer.GetRendezvousEntriesCount()
+	require.Equal(t, 0, middleEntriesCount, "Middle should have 0 rendezvous points")
+}
+
+func Test_TOR_HS_PrepareRendezvousPoint_SmallTimeout_Fails(t *testing.T) {
+	client, _, _, exit, circID := Build3HopCircuit(t)
+
+	serviceID := uint16(42)
+	cookie, err := client.Peer.PrepareRendezvousPoint(serviceID, circID, 1*time.Nanosecond)
+
+	require.Error(t, err)
+	require.Equal(t, cookie, [20]byte{}, "Cookie should be empty on error")
+	require.Contains(t, err.Error(), "timed out")
+
+	time.Sleep(200 * time.Millisecond) // Give time for any async operations
+
+	// Exit node still should have a rendezvous point recorded
+	exitEntriesCount := exit.Peer.GetRendezvousEntriesCount()
+	require.Equal(t, 1, exitEntriesCount, "Exit should have 1 rendezvous point")
+}
