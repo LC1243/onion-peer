@@ -239,28 +239,49 @@ func (n *node) Start() error {
 func (n *node) listenLoop() {
 	defer n.wg.Done()
 	defer close(n.stopped)
-	defer close(n.packetCh)
+	// packetCh is closed by the reader goroutine
 
-	for {
-		select {
-		case <-n.stopCh:
-			return
-		default:
-		}
+	// Create a buffered channel to decouple reading from processing
+	// Size should be large enough to handle bursts
+	packetCh := make(chan transport.Packet, 2000)
 
-		if n.conf.Socket == nil {
-			time.Sleep(50 * time.Millisecond)
-			continue
-		}
+	// 1. Reader Goroutine
+	n.wg.Add(1)
+	go func() {
+		defer n.wg.Done()
+		defer close(packetCh)
 
-		pkt, err := n.conf.Socket.Recv(1000 * time.Millisecond)
-		if errors.Is(err, transport.TimeoutError(0)) {
-			continue
-		}
-		if err != nil {
-			continue
-		}
+		for {
+			select {
+			case <-n.stopCh:
+				return
+			default:
+			}
 
+			if n.conf.Socket == nil {
+				time.Sleep(50 * time.Millisecond)
+				continue
+			}
+
+			pkt, err := n.conf.Socket.Recv(1000 * time.Millisecond)
+			if errors.Is(err, transport.TimeoutError(0)) {
+				continue
+			}
+			if err != nil {
+				continue
+			}
+
+			// Push to channel - non-blocking if buffer isn't full
+			select {
+			case packetCh <- pkt:
+			case <-n.stopCh:
+				return
+			}
+		}
+	}()
+
+	// 2. Processor Loop (runs in the main listenLoop goroutine)
+	for pkt := range packetCh {
 		// Rate limiting
 		if n.congestionControl.Load() {
 			size := CellSize

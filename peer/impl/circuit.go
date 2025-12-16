@@ -12,6 +12,12 @@ import (
 	"go.dedis.ch/cs438/transport/udp"
 )
 
+// PacketQueueItem holds a cell waiting to be sent
+type PacketQueueItem struct {
+	Dest string
+	Cell Cell
+}
+
 // Circuit represents a relay-side circuit state
 type Circuit struct {
 	InCircID  uint16
@@ -31,6 +37,10 @@ type Circuit struct {
 	BackwardPackageWindow int        // Cells we can send to PrevHop
 	BackwardDeliverWindow int        // Cells we can accept from NextHop
 	BackwardWindowCond    *sync.Cond // To block when BackwardPackageWindow is 0
+
+	// Queues for non-blocking flow control
+	ForwardQueue  []PacketQueueItem // Packets waiting for ForwardPackageWindow
+	BackwardQueue []PacketQueueItem // Packets waiting for BackwardPackageWindow
 
 	// Legacy fields (kept for backward compatibility with endpoint flow control)
 	PackageWindow int // Number of cells that can be sent (used by exit node)
@@ -455,12 +465,27 @@ func (n *node) HandleForwardRelay(cell Cell, circ *Circuit) error {
 	if n.congestionControl.Load() && relayCell.Command == RelaySendme && relayCell.StreamID == 0 {
 		n.circuitsMu.Lock()
 		circ.BackwardPackageWindow += WindowIncrement
+
+		// FLUSH BACKWARD QUEUE
+		var packetsToSend []PacketQueueItem
+		for circ.BackwardPackageWindow > 0 && len(circ.BackwardQueue) > 0 {
+			packetsToSend = append(packetsToSend, circ.BackwardQueue[0])
+			circ.BackwardQueue = circ.BackwardQueue[1:]
+			circ.BackwardPackageWindow--
+		}
+
 		circ.BackwardWindowCond.Broadcast()
 		n.circuitsMu.Unlock()
+
+		// Send queued packets
+		for _, item := range packetsToSend {
+			n.SendCell(item.Dest, item.Cell, circ)
+		}
+
 		n.log.Info().
 			Uint16("circID", circ.InCircID).
 			Int("newBackwardPackageWindow", circ.BackwardPackageWindow).
-			Msg("Processed hop-by-hop SENDME from PrevHop, increased BackwardPackageWindow")
+			Msg("Processed hop-by-hop SENDME from PrevHop, flushed BackwardQueue")
 		return nil // Don't forward circuit-level SENDME
 	}
 
@@ -497,17 +522,6 @@ func (n *node) HandleForwardRelay(cell Cell, circ *Circuit) error {
 				n.log.Error().Err(err).Msg("Failed to send RELAY_SENDME to PrevHop")
 			}
 		}
-
-		// Wait for ForwardPackageWindow before forwarding to NextHop
-		n.circuitsMu.Lock()
-		for circ.ForwardPackageWindow <= 0 {
-			n.log.Debug().
-				Uint16("circID", circ.InCircID).
-				Msg("ForwardPackageWindow exhausted, waiting for SENDME from NextHop")
-			circ.ForwardWindowCond.Wait()
-		}
-		circ.ForwardPackageWindow--
-		n.circuitsMu.Unlock()
 	}
 
 	// Recompute digest for the decrypted data
@@ -527,6 +541,21 @@ func (n *node) HandleForwardRelay(cell Cell, circ *Circuit) error {
 	if err != nil {
 		return err
 	}
+
+	// NON-BLOCKING SEND LOGIC
+	if n.congestionControl.Load() && isDataCell {
+		n.circuitsMu.Lock()
+		if circ.ForwardPackageWindow <= 0 {
+			// Window full? Queue it!
+			circ.ForwardQueue = append(circ.ForwardQueue, PacketQueueItem{Dest: circ.NextHop, Cell: forwardCell})
+			n.circuitsMu.Unlock()
+			n.log.Debug().Uint16("circID", circ.InCircID).Msg("ForwardPackageWindow exhausted, queued packet")
+			return nil
+		}
+		circ.ForwardPackageWindow--
+		n.circuitsMu.Unlock()
+	}
+
 	return n.SendCell(circ.NextHop, forwardCell, circ)
 }
 
@@ -591,12 +620,27 @@ func (n *node) HandleBackwardRelay(cell Cell, circ *Circuit) error {
 	if n.congestionControl.Load() && relayCell.Command == RelaySendme && relayCell.StreamID == 0 {
 		n.circuitsMu.Lock()
 		circ.ForwardPackageWindow += WindowIncrement
+
+		// FLUSH FORWARD QUEUE
+		var packetsToSend []PacketQueueItem
+		for circ.ForwardPackageWindow > 0 && len(circ.ForwardQueue) > 0 {
+			packetsToSend = append(packetsToSend, circ.ForwardQueue[0])
+			circ.ForwardQueue = circ.ForwardQueue[1:]
+			circ.ForwardPackageWindow--
+		}
+
 		circ.ForwardWindowCond.Broadcast()
 		n.circuitsMu.Unlock()
+
+		// Send queued packets
+		for _, item := range packetsToSend {
+			n.SendCell(item.Dest, item.Cell, circ)
+		}
+
 		n.log.Info().
 			Uint16("circID", circ.InCircID).
 			Int("newForwardPackageWindow", circ.ForwardPackageWindow).
-			Msg("Processed hop-by-hop SENDME from NextHop, increased ForwardPackageWindow")
+			Msg("Processed hop-by-hop SENDME from NextHop, flushed ForwardQueue")
 		return nil // Don't forward circuit-level SENDME
 	}
 
@@ -619,17 +663,6 @@ func (n *node) HandleBackwardRelay(cell Cell, circ *Circuit) error {
 				n.log.Error().Err(err).Msg("Failed to send RELAY_SENDME to NextHop")
 			}
 		}
-
-		// Wait for BackwardPackageWindow before forwarding to PrevHop
-		n.circuitsMu.Lock()
-		for circ.BackwardPackageWindow <= 0 {
-			n.log.Debug().
-				Uint16("circID", circ.InCircID).
-				Msg("BackwardPackageWindow exhausted, waiting for SENDME from PrevHop")
-			circ.BackwardWindowCond.Wait()
-		}
-		circ.BackwardPackageWindow--
-		n.circuitsMu.Unlock()
 	}
 
 	// Encrypt one layer using our crypto state (adding a layer of encryption)
@@ -670,6 +703,20 @@ func (n *node) HandleBackwardRelay(cell Cell, circ *Circuit) error {
 			Uint16("circID", circ.InCircID).
 			Msg("Failed to encode encrypted relay cell")
 		return err
+	}
+
+	// NON-BLOCKING SEND LOGIC
+	if n.congestionControl.Load() && isDataCell {
+		n.circuitsMu.Lock()
+		if circ.BackwardPackageWindow <= 0 {
+			// Window full? Queue it!
+			circ.BackwardQueue = append(circ.BackwardQueue, PacketQueueItem{Dest: circ.PrevHop, Cell: cellToSend})
+			n.circuitsMu.Unlock()
+			n.log.Debug().Uint16("circID", circ.InCircID).Msg("BackwardPackageWindow exhausted, queued packet")
+			return nil
+		}
+		circ.BackwardPackageWindow--
+		n.circuitsMu.Unlock()
 	}
 
 	return n.SendCell(circ.PrevHop, cellToSend, circ)
