@@ -793,11 +793,13 @@ func (n *node) sendRelayControlCell(circ *Circuit, streamID uint16, command uint
 	exitIdx := len(n.circuitCryptoStates[circ.InCircID]) - 1
 	crypto := n.circuitCryptoStates[circ.InCircID][exitIdx]
 
+	circ.CryptoMu.Lock()
 	encrypted, digest, err := EncryptRelayPayload(
 		crypto,
 		DirectionBackward,
 		[]byte{},
 	)
+	circ.CryptoMu.Unlock()
 
 	if err != nil {
 		n.log.Error().
@@ -2415,11 +2417,13 @@ func (n *node) sendRelaySendmeStream(circ *Circuit, streamID uint16) error {
 	exitIdx := len(n.circuitCryptoStates[circ.InCircID]) - 1
 	crypto := n.circuitCryptoStates[circ.InCircID][exitIdx]
 
+	circ.CryptoMu.Lock()
 	encrypted, digest, err := EncryptRelayPayload(
 		crypto,
 		DirectionBackward,
 		[]byte{},
 	)
+	circ.CryptoMu.Unlock()
 
 	if err != nil {
 		n.log.Error().

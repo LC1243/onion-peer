@@ -184,11 +184,13 @@ func (n *node) SendRelayIntroEstablished(circ *Circuit) error {
 	exitIdx := len(cryptoStates) - 1
 	cryptoState := cryptoStates[exitIdx]
 
+	circ.CryptoMu.Lock()
 	encrypted, digest, err := EncryptRelayPayload(
 		cryptoState,
 		DirectionBackward,
 		[]byte{}, // empty payload
 	)
+	circ.CryptoMu.Unlock()
 	if err != nil {
 		return err
 	}
@@ -478,7 +480,9 @@ func (n *node) SendHSDirReply(circ *Circuit, payload []byte) error {
 	exitIdx := len(n.circuitCryptoStates[circ.InCircID]) - 1
 	cryptoState := n.circuitCryptoStates[circ.InCircID][exitIdx]
 
+	circ.CryptoMu.Lock()
 	encrypted, digest, err := EncryptRelayPayload(cryptoState, DirectionBackward, payload)
+	circ.CryptoMu.Unlock()
 	if err != nil {
 		return err
 	}
