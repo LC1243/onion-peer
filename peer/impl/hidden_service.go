@@ -1093,9 +1093,14 @@ func (n *node) HandleRelayIntroduceACK(relay RelayCell) error {
 		return fmt.Errorf("invalid introduce ACK payload")
 	}
 
+	cryptoStates := n.circuitCryptoStates[relay.CircID]
+	if len(cryptoStates) == 0 {
+		return fmt.Errorf("no crypto states for circuit %d", relay.CircID)
+	}
+	flag := decryptRelayDataAtClient(cryptoStates, relay.Data, relay.Digest)[0]
+
 	// Check if the introduction was successful
 	var success bool
-	flag := relay.Data[0]
 	switch flag {
 	case IntroduceACKSuccess:
 		success = true
