@@ -40,6 +40,17 @@ type ServiceDescriptor struct {
 	Signature     []byte // DS(ServiceID || ExpiresAt || IntroPoints || ServicePubKey)
 }
 
+type IPIntroduceMessage struct {
+	ServiceID     string
+	encryptedBlob []byte // encrypted ServiceIntroduceMessage with service pubkey
+}
+
+type ServiceIntroduceMessage struct {
+	Cookie      [CookieSize]byte
+	RPAddr      string
+	ClientDHPub []byte
+}
+
 // GenerateServiceKeyPair generates a new RSA keypair for use as keys for a service
 // NOTE: We intentionally use 1024-bit RSA keys here.
 // In real Tor, hidden services keys and descriptors are fragmented
@@ -1111,4 +1122,81 @@ func (n *node) HandleRelayIntroduceACK(relay RelayCell) error {
 		Msg("Introduce ACK received")
 
 	return nil
+}
+
+// EncodeServiceIntroduceMessage encodes a ServiceIntroduceMessage into a relay payload
+func EncodeServiceIntroduceMessage(msg *ServiceIntroduceMessage) ([]byte, error) {
+	buf := bytes.NewBuffer(nil)
+
+	// Cookie (fixed size)
+	_, err := buf.Write(msg.Cookie[:])
+	if err != nil {
+		return nil, err
+	}
+
+	// RPAddr (length-prefixed)
+	rpb := []byte(msg.RPAddr)
+	err = binary.Write(buf, binary.BigEndian, uint16(len(rpb)))
+	if err != nil {
+		return nil, err
+	}
+	_, err = buf.Write(rpb)
+	if err != nil {
+		return nil, err
+	}
+
+	// ClientDHPub (length-prefixed)
+	err = binary.Write(buf, binary.BigEndian, uint16(len(msg.ClientDHPub)))
+	if err != nil {
+		return nil, err
+	}
+	_, err = buf.Write(msg.ClientDHPub)
+	if err != nil {
+		return nil, err
+	}
+
+	if buf.Len() > RelayPayloadLen {
+		return nil, fmt.Errorf("service introduce message too large (%d bytes)", buf.Len())
+	}
+
+	return buf.Bytes(), nil
+}
+
+// DecodeServiceIntroduceMessage decodes a relay payload into a ServiceIntroduceMessage
+func DecodeServiceIntroduceMessage(data []byte) (*ServiceIntroduceMessage, error) {
+	buf := bytes.NewReader(data)
+	msg := &ServiceIntroduceMessage{}
+
+	// Cookie (fixed size)
+	_, err := buf.Read(msg.Cookie[:])
+	if err != nil {
+		return nil, fmt.Errorf("failed to read cookie: %w", err)
+	}
+
+	// RPAddr (length-prefixed)
+	var rpLen uint16
+	err = binary.Read(buf, binary.BigEndian, &rpLen)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read RPAddr length: %w", err)
+	}
+	rpb := make([]byte, rpLen)
+	_, err = buf.Read(rpb)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read RPAddr: %w", err)
+	}
+	msg.RPAddr = string(rpb)
+
+	// ClientDHPub (length-prefixed)
+	var dhLen uint16
+	err = binary.Read(buf, binary.BigEndian, &dhLen)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read ClientDHPub length: %w", err)
+	}
+	msg.ClientDHPub = make([]byte, dhLen)
+	_, err = buf.Read(msg.ClientDHPub)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read ClientDHPub: %w", err)
+	}
+
+	return msg, nil
 }

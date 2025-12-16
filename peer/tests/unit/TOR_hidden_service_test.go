@@ -6,6 +6,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	z "go.dedis.ch/cs438/internal/testing"
+	"go.dedis.ch/cs438/peer/impl"
 )
 
 // Test_TOR_HS_EstablishIntroPoint_Basic tests the process of establishing an introduction point for a hidden service.
@@ -614,4 +615,27 @@ func Test_TOR_HS_PrepareRendezvousPoint_SmallTimeout_Fails(t *testing.T) {
 	// Exit node still should have a rendezvous point recorded
 	exitEntriesCount := exit.Peer.GetRendezvousEntriesCount()
 	require.Equal(t, 1, exitEntriesCount, "Exit should have 1 rendezvous point")
+}
+
+// Test_TOR_HS_EncodeDecodeServiceIntroductionMessage_Succeeds tests encoding and decoding of a
+// Service Introduction Message
+func Test_TOR_HS_EncodeDecodeServiceIntroductionMessage_Succeeds(t *testing.T) {
+	cookie := [20]byte{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19}
+	RPAddr := "rendezvous.example.onion:1234"
+	clientDHPub := []byte{0x30, 0x82, 0x01, 0x0a, 0x02, 0x82, 0x01, 0x01, 0x00, 0xc3, 0x5d, 0x5e, 0x6f, 0x7a, 0x8b, 0x9c}
+
+	msg := impl.ServiceIntroduceMessage{
+		Cookie:      cookie,
+		RPAddr:      RPAddr,
+		ClientDHPub: clientDHPub,
+	}
+
+	encoded, err := impl.EncodeServiceIntroduceMessage(&msg)
+	require.NoError(t, err)
+	decoded, err := impl.DecodeServiceIntroduceMessage(encoded)
+	require.NoError(t, err)
+
+	require.Equal(t, msg.Cookie, decoded.Cookie, "Cookies should match")
+	require.Equal(t, msg.RPAddr, decoded.RPAddr, "RP addresses should match")
+	require.Equal(t, msg.ClientDHPub, decoded.ClientDHPub, "Client DH public keys should match")
 }
