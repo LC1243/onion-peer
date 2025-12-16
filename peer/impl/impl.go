@@ -183,6 +183,10 @@ type node struct {
 	hsDirMu     sync.RWMutex
 	hsdirWaitMu sync.Mutex
 	hsdirWait   map[uint16]chan *ServiceDescriptor
+
+	// Test hooks for security testing
+	TestCellInterceptor func(*Cell) // Function hook called before sending a cell to potentially modify it
+	TestInterceptorMu   sync.RWMutex
 }
 
 // Start implements peer.Service
@@ -510,4 +514,13 @@ func (n *node) CleanupStreams(circID uint16) {
 	n.streamsMu.Lock()
 	delete(n.streamTables, circID)
 	n.streamsMu.Unlock()
+}
+
+// SetTestCellInterceptor sets a test hook for intercepting cells before sending.
+// This is used for security testing (e.g., tampering, corruption tests).
+// Only for testing - not part of the public Peer interface.
+func (n *node) SetTestCellInterceptor(interceptor func(*Cell)) {
+	n.TestInterceptorMu.Lock()
+	n.TestCellInterceptor = interceptor
+	n.TestInterceptorMu.Unlock()
 }

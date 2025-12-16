@@ -790,6 +790,13 @@ func (n *node) HandleRelayExtended(_ RelayCell, _ *Circuit) error {
 
 // SendCell sends a cell to a destination
 func (n *node) SendCell(dest string, cell Cell) error {
+	// Calling the hook
+	n.TestInterceptorMu.RLock()
+	if n.TestCellInterceptor != nil {
+		n.TestCellInterceptor(&cell)
+	}
+	n.TestInterceptorMu.RUnlock()
+
 	encoded, err := n.EncodeCell(cell)
 	if err != nil {
 		return err
