@@ -639,3 +639,23 @@ func Test_TOR_HS_EncodeDecodeServiceIntroductionMessage_Succeeds(t *testing.T) {
 	require.Equal(t, msg.RPAddr, decoded.RPAddr, "RP addresses should match")
 	require.Equal(t, msg.ClientDHPub, decoded.ClientDHPub, "Client DH public keys should match")
 }
+
+// Test_TOR_HS_EncodeDecodeIPIntroductionMessage_Succeeds tests encoding and decoding of an
+// IP Introduction Message
+func Test_TO_HS_EncodeDecodeIPIntroductionMessage_Succeeds(t *testing.T) {
+	serviceID := "42"
+	encryptedBlob := []byte{0xde, 0xad, 0xbe, 0xef, 0xca, 0xfe, 0xba, 0xbe}
+
+	msg := impl.IPIntroduceMessage{
+		ServiceID:     serviceID,
+		EncryptedBlob: encryptedBlob,
+	}
+
+	encoded, err := impl.EncodeIPIntroduceMessage(&msg)
+	require.NoError(t, err)
+	decoded, err := impl.DecodeIPIntroduceMessage(encoded)
+	require.NoError(t, err)
+
+	require.Equal(t, msg.ServiceID, decoded.ServiceID, "Service IDs should match")
+	require.Equal(t, msg.EncryptedBlob, decoded.EncryptedBlob, "Encrypted blobs should match")
+}

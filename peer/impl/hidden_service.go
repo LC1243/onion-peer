@@ -42,7 +42,7 @@ type ServiceDescriptor struct {
 
 type IPIntroduceMessage struct {
 	ServiceID     string
-	encryptedBlob []byte // encrypted ServiceIntroduceMessage with service pubkey
+	EncryptedBlob []byte // encrypted ServiceIntroduceMessage with service pubkey
 }
 
 type ServiceIntroduceMessage struct {
@@ -1199,4 +1199,70 @@ func DecodeServiceIntroduceMessage(data []byte) (*ServiceIntroduceMessage, error
 	}
 
 	return msg, nil
+}
+
+// EncodeIPIntroduceMessage encodes an IPIntroduceMessage into a relay payload
+func EncodeIPIntroduceMessage(msg *IPIntroduceMessage) ([]byte, error) {
+	buf := bytes.NewBuffer(nil)
+
+	// ServiceID (length-prefixed)
+	sidBytes := []byte(msg.ServiceID)
+	err := binary.Write(buf, binary.BigEndian, uint16(len(sidBytes)))
+	if err != nil {
+		return nil, err
+	}
+	_, err = buf.Write(sidBytes)
+	if err != nil {
+		return nil, err
+	}
+
+	// encryptedBlob (length-prefixed)
+	err = binary.Write(buf, binary.BigEndian, uint16(len(msg.EncryptedBlob)))
+	if err != nil {
+		return nil, err
+	}
+	_, err = buf.Write(msg.EncryptedBlob)
+	if err != nil {
+		return nil, err
+	}
+
+	if buf.Len() > RelayPayloadLen {
+		return nil, fmt.Errorf("IP introduce message too large (%d bytes)", buf.Len())
+	}
+
+	return buf.Bytes(), nil
+}
+
+// DecodeIPIntroduceMessage decodes an IPIntroduceMessage from a relay payload
+func DecodeIPIntroduceMessage(data []byte) (*IPIntroduceMessage, error) {
+	buf := bytes.NewReader(data)
+
+	// ServiceID (length-prefixed)
+	var sidLen uint16
+	err := binary.Read(buf, binary.BigEndian, &sidLen)
+	if err != nil {
+		return nil, fmt.Errorf("read ServiceID length: %w", err)
+	}
+	sidBytes := make([]byte, sidLen)
+	_, err = buf.Read(sidBytes)
+	if err != nil {
+		return nil, fmt.Errorf("read ServiceID: %w", err)
+	}
+
+	// encryptedBlob (length-prefixed)
+	var blobLen uint16
+	err = binary.Read(buf, binary.BigEndian, &blobLen)
+	if err != nil {
+		return nil, fmt.Errorf("read encryptedBlob length: %w", err)
+	}
+	encryptedBlob := make([]byte, blobLen)
+	_, err = buf.Read(encryptedBlob)
+	if err != nil {
+		return nil, fmt.Errorf("read encryptedBlob: %w", err)
+	}
+
+	return &IPIntroduceMessage{
+		ServiceID:     string(sidBytes),
+		EncryptedBlob: encryptedBlob,
+	}, nil
 }
