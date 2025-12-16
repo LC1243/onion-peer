@@ -1379,3 +1379,79 @@ func (n *node) SendIntroduce2Message(circ *Circuit, encryptedBlob []byte) error 
 	}
 	return n.SendCell(circ.PrevHop, cell)
 }
+
+// HandleRelayIntroduce1 handles an introduce1 relay cell received at the introduction point
+func (n *node) HandleRelayIntroduce1(relay RelayCell, circ *Circuit) error {
+	cryptoStates := n.circuitCryptoStates[relay.CircID]
+	if len(cryptoStates) == 0 {
+		return fmt.Errorf("no crypto states for circuit %d", relay.CircID)
+	}
+
+	plaintext := decryptRelayDataAtClient(cryptoStates, relay.Data, relay.Digest)
+	ipIntroMsg, err := DecodeIPIntroduceMessage(plaintext)
+	if err != nil {
+		return fmt.Errorf("failed to decode IP introduce message: %w", err)
+	}
+
+	n.log.Info().
+		Uint16("circID", relay.CircID).
+		Str("serviceID", ipIntroMsg.ServiceID).
+		Msg("Received introduce1 message at introduction point")
+
+	n.introPointsMu.Lock()
+	introList, found := n.introPoints[ipIntroMsg.ServiceID]
+	n.introPointsMu.Unlock()
+
+	// No introduction points found for the service ID, send failure ACK
+	if !found || len(introList) == 0 {
+		n.log.Info().
+			Str("serviceID", ipIntroMsg.ServiceID).
+			Msg("No introduction points found for service ID")
+		return n.SendIntroduceAck(circ, false)
+	}
+
+	// Introduction point found, send introduce2 to the hidden service and ACK to the client
+	introState := introList[0]
+	var targetCirc *Circuit
+	n.circuitsMu.Lock()
+	for _, c := range n.circuits {
+		if c.InCircID == introState.BobCircID {
+			targetCirc = c
+			break
+		}
+	}
+	n.circuitsMu.Unlock()
+
+	if targetCirc == nil {
+		err = n.SendIntroduceAck(circ, false)
+		if err != nil {
+			return fmt.Errorf("failed to send introduce ACK: %w", err)
+		}
+		n.log.Info().
+			Uint16("bobCircID", introState.BobCircID).
+			Msg("No circuit found for BobCircID, sent failure ACK to client")
+		return fmt.Errorf("no circuit found for BobCircID")
+	}
+
+	err = n.SendIntroduce2Message(targetCirc, ipIntroMsg.EncryptedBlob)
+	if err != nil {
+		return fmt.Errorf("failed to send introduce2 message: %w", err)
+	}
+
+	n.log.Info().
+		Uint16("inCircID", relay.CircID).
+		Uint16("outCircID", introState.BobCircID).
+		Str("serviceID", ipIntroMsg.ServiceID).
+		Msg("Sent introduce2 message to hidden service")
+
+	err = n.SendIntroduceAck(circ, true)
+	if err != nil {
+		return fmt.Errorf("failed to send introduce ACK: %w", err)
+	}
+
+	n.log.Info().
+		Uint16("circID", relay.CircID).
+		Str("serviceID", ipIntroMsg.ServiceID).
+		Msg("Sent introduce ACK to client")
+	return nil
+}
