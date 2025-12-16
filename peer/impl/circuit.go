@@ -102,8 +102,8 @@ type circuitKey struct {
 
 const (
 	// Flow control constants
-	DefaultWindowSize = 1000 // Unit is cells
-	WindowIncrement   = 100
+	DefaultWindowSize = 500 // Unit is cells
+	WindowIncrement   = 50
 
 	// Stream flow control constants
 	DefaultStreamWindowSize = 500
