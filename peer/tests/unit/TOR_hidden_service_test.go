@@ -707,12 +707,14 @@ func Test_TOR_HS_Descriptor_Fragmentation(t *testing.T) {
 		"descriptor publish should span multiple relay cells",
 	)
 
+	clientInsBefore := len(client.GetIns())
 	// Lookup descriptor
 	ok, found := client.Peer.LookupDescriptor(
 		circID,
 		serviceID,
 		time.Second,
 	)
+	require.Greater(t, len(client.GetIns()), clientInsBefore+1, "should have received multiple relay cells")
 
 	require.True(t, ok)
 	require.Equal(t, introORs, found)
