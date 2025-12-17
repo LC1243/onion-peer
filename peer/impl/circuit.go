@@ -477,6 +477,8 @@ func (n *node) HandleRelayAtEndpoint(relayCell RelayCell, circ *Circuit) error {
 		return n.HandleRelayHSDirPublish(relayCell, circ)
 	case RelayHSDirLookup:
 		return n.HandleRelayHSDirLookup(relayCell, circ)
+	case RelayHSDirDelete:
+		return n.HandleRelayHSDirDelete(relayCell, circ)
 	default:
 		return fmt.Errorf("unknown relay command %d", relayCell.Command)
 	}

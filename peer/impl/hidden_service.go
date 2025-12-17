@@ -522,10 +522,12 @@ func (n *node) PublishDescriptorToHSDir(serviceID string,
 	}
 
 	relay := RelayCell{
-		CircID: circID, StreamID: 0,
-		Command: RelayHSDirPublish,
-		Digest:  digest, Length: uint16(len(encrypted)),
-		Data: encrypted,
+		CircID:   circID,
+		StreamID: 0,
+		Command:  RelayHSDirPublish,
+		Digest:   digest,
+		Length:   uint16(len(encrypted)),
+		Data:     encrypted,
 	}
 	cell, err := n.EncodeRelayCell(relay)
 	if err != nil {
@@ -802,7 +804,8 @@ func (n *node) GetIntroPointStateCount(serviceID string) int {
 // CreateHiddenService implements peer.TorHiddenServices
 func (n *node) CreateHiddenService(introPoints [][3]string,
 	timeout time.Duration,
-	lifetime time.Duration) (string, []uint16, error) {
+	lifetime time.Duration,
+	IntroCircID uint16) (string, []uint16, error) {
 
 	if len(introPoints) == 0 {
 		return "", nil, fmt.Errorf("at least one intro path is required")
@@ -844,7 +847,7 @@ func (n *node) CreateHiddenService(introPoints [][3]string,
 	// Publish descriptor
 	introORs := n.GetServiceIntroPoints(serviceID)
 
-	err = n.PublishDescriptorToHSDir(serviceID, introORs, lifetime, circuits[0], timeout)
+	err = n.PublishDescriptorToHSDir(serviceID, introORs, lifetime, IntroCircID, timeout)
 	if err != nil {
 		cleanup()
 		return "", nil, fmt.Errorf("publish descriptor failed: %w", err)
@@ -858,11 +861,106 @@ func (n *node) CreateHiddenService(introPoints [][3]string,
 	return serviceID, circuits, nil
 }
 
+// HandleRelayHSDirDelete handles relay cells sent to delete a service descriptor to the HSDir
+func (n *node) HandleRelayHSDirDelete(relay RelayCell, circ *Circuit) error {
+	if !n.IsHiddenServiceDir {
+		return nil // ignore
+	}
+
+	desc, err := DecodeServiceDescriptor(relay.Data)
+	if err != nil {
+		return err
+	}
+
+	err = n.VerifyServiceDescriptor(desc)
+	if err != nil {
+		n.log.Error().Err(err).Msg("HSDir received invalid descriptor")
+		return err
+	}
+
+	n.log.Info().
+		Str("serviceID", desc.ServiceID).
+		Msg("HSDir received delete request for service")
+
+	n.hsDirMu.Lock()
+	delete(n.hsDirStore, desc.ServiceID)
+	n.hsDirMu.Unlock()
+
+	n.log.Info().
+		Str("serviceID", desc.ServiceID).
+		Msg("HSDir deleted service")
+
+	return n.SendHSDirReply(circ, nil)
+}
+
+// DeleteDescriptorFromHSDir sends a request to the HSDir to delete a service descriptor from the lookup service
+func (n *node) DeleteDescriptorFromHSDir(serviceID string, circID uint16, timeout time.Duration) error {
+	cc, ok := n.clientCircuits[circID]
+	if !ok {
+		return fmt.Errorf("not a client circuit %d", circID)
+	}
+
+	introORs := n.GetServiceIntroPoints(serviceID)
+	desc, err := n.BuildServiceDescriptor(serviceID, introORs, 1*time.Minute)
+	if err != nil {
+		return err
+	}
+
+	payload, err := EncodeServiceDescriptor(desc)
+	if err != nil {
+		return err
+	}
+
+	cryptoStates := n.circuitCryptoStates[circID]
+	encrypted, digest, err := EncryptRelayCellThroughCircuit(cryptoStates, payload)
+	if err != nil {
+		return err
+	}
+
+	relay := RelayCell{
+		CircID:   circID,
+		StreamID: 0,
+		Command:  RelayHSDirDelete,
+		Digest:   digest,
+		Length:   uint16(len(encrypted)),
+		Data:     encrypted,
+	}
+
+	cell, err := n.EncodeRelayCell(relay)
+	if err != nil {
+		return err
+	}
+
+	replyCh := make(chan *ServiceDescriptor, 1)
+
+	n.hsdirWaitMu.Lock()
+	n.hsdirWait[circID] = replyCh
+	n.hsdirWaitMu.Unlock()
+
+	err = n.SendCell(cc.Hops[0], cell)
+	if err != nil {
+		return err
+	}
+
+	select {
+	case <-replyCh:
+		return nil
+	case <-time.After(timeout):
+		return fmt.Errorf("HSDir delete timed out")
+	}
+}
+
 // DeleteHiddenService implements peer.TorHiddenServices
-func (n *node) DeleteHiddenService(serviceID string) error {
+func (n *node) DeleteHiddenService(serviceID string, circID uint16) error {
 	hs, ok := n.hiddenServices[serviceID]
 	if !ok {
 		return fmt.Errorf("hidden service %s not found", serviceID)
+	}
+
+	// the lifetime doesn't matter, since we are deleting the descriptor from the lookup service
+	err := n.DeleteDescriptorFromHSDir(serviceID, circID, 5*time.Second)
+	if err != nil {
+		return err
 	}
 
 	// Destroy introduction point circuits
@@ -875,7 +973,7 @@ func (n *node) DeleteHiddenService(serviceID string) error {
 
 	n.log.Info().
 		Str("serviceID", serviceID).
-		Msg("Hidden service deleted locally")
+		Msg("Hidden service deleted")
 
 	return nil
 }
