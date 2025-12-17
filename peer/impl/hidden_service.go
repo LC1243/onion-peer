@@ -9,6 +9,7 @@ import (
 	"crypto/x509"
 	"encoding/binary"
 	"fmt"
+	"io"
 	"time"
 )
 
@@ -40,13 +41,17 @@ type ServiceDescriptor struct {
 	Signature     []byte // DS(ServiceID || ExpiresAt || IntroPoints || ServicePubKey)
 }
 
+type FragmentHeader struct {
+	MsgID uint16
+	Index uint16 // fragment index
+	Total uint16 // total fragments
+}
+
+const FragmentHeaderLen = 2 + 2 + 2 // (uint16 each)
+
 // GenerateServiceKeyPair generates a new RSA keypair for use as keys for a service
-// NOTE: We intentionally use 1024-bit RSA keys here.
-// In real Tor, hidden services keys and descriptors are fragmented
-// across multiple cells. In this simplified implementation, service descriptors
-// must fit within a single relay cell (RelayPayloadLen = 498 bytes).
 func GenerateServiceKeyPair() (*OnionKeyPair, error) {
-	privateKey, err := rsa.GenerateKey(rand.Reader, 1024)
+	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate RSA key: %w", err)
 	}
@@ -237,6 +242,206 @@ func (n *node) SetPeerAsHSDir(value bool) {
 	n.IsHiddenServiceDir = value
 }
 
+func (n *node) GenerateMsgID() (uint16, error) {
+	var b [2]byte // uint16
+	_, err := rand.Read(b[:])
+	if err != nil {
+		return 0, err
+	}
+	return binary.BigEndian.Uint16(b[:]), nil
+}
+
+// EncodeFragment encodes a FragmentHeader and a chunk of data into a relay payload
+func EncodeFragment(h FragmentHeader, chunk []byte) ([]byte, error) {
+	buf := bytes.NewBuffer(make([]byte, 0, FragmentHeaderLen+len(chunk)))
+	if err := binary.Write(buf, binary.BigEndian, h.MsgID); err != nil {
+		return nil, err
+	}
+	if err := binary.Write(buf, binary.BigEndian, h.Index); err != nil {
+		return nil, err
+	}
+	if err := binary.Write(buf, binary.BigEndian, h.Total); err != nil {
+		return nil, err
+	}
+	_, err := buf.Write(chunk)
+	return buf.Bytes(), err
+}
+
+// DecodeFragment decodes a relay payload into a FragmentHeader and a chunk of data
+func DecodeFragment(b []byte) (FragmentHeader, []byte, error) {
+	if len(b) < FragmentHeaderLen {
+		return FragmentHeader{}, nil, fmt.Errorf("fragment too short")
+	}
+	r := bytes.NewReader(b)
+	var h FragmentHeader
+	if err := binary.Read(r, binary.BigEndian, &h.MsgID); err != nil {
+		return FragmentHeader{}, nil, err
+	}
+	if err := binary.Read(r, binary.BigEndian, &h.Index); err != nil {
+		return FragmentHeader{}, nil, err
+	}
+	if err := binary.Read(r, binary.BigEndian, &h.Total); err != nil {
+		return FragmentHeader{}, nil, err
+	}
+	rest, err := io.ReadAll(r)
+	return h, rest, err
+}
+
+// SplitPayload splits a payload into chunks of a given size
+func SplitPayload(payload []byte, maxChunk int) [][]byte {
+	if maxChunk <= 0 {
+		return nil
+	}
+	var out [][]byte
+	for off := 0; off < len(payload); off += maxChunk {
+		end := off + maxChunk
+		if end > len(payload) {
+			end = len(payload)
+		}
+		out = append(out, payload[off:end])
+	}
+	return out
+}
+
+// AddFragment adds a chunk of data to a fragment buffer
+func (n *node) AddFragment(circID, msgID, idx, total uint16, chunk []byte) ([]byte, bool, error) {
+	n.hsdirFragMu.Lock()
+	defer n.hsdirFragMu.Unlock()
+
+	key := fragKey{CircID: circID, MsgID: msgID}
+
+	frag := n.hsdirFrags[key]
+	if frag == nil {
+		frag = &fragBuf{total: total, parts: make(map[uint16][]byte, total)}
+		n.hsdirFrags[key] = frag
+	}
+
+	if frag.total != total || idx >= total {
+		return nil, false, fmt.Errorf("fragment index out of range")
+	}
+
+	// store if new
+	_, exists := frag.parts[idx]
+	if !exists {
+		frag.parts[idx] = append([]byte(nil), chunk...)
+	}
+
+	if uint16(len(frag.parts)) != frag.total {
+		return nil, false, nil // not complete yet
+	}
+
+	// reassemble
+	var full bytes.Buffer
+	for i := uint16(0); i < frag.total; i++ {
+		part, ok := frag.parts[i]
+		if !ok {
+			return nil, false, fmt.Errorf("missing fragment %d", i)
+		}
+		full.Write(part)
+	}
+
+	delete(n.hsdirFrags, key)
+	return full.Bytes(), true, nil
+}
+
+// SendFragmentsBackward sends fragments one by one in a loop in a backwards direction
+func (n *node) SendFragmentsBackward(frags [][]byte,
+	msgID uint16, circ *Circuit,
+	cryptoState *CircuitCryptoState,
+	command uint8) error {
+
+	for i, chunk := range frags {
+
+		framed, err := EncodeFragment(FragmentHeader{
+			MsgID: msgID,
+			Index: uint16(i),
+			Total: uint16(len(frags)),
+		}, chunk)
+
+		if err != nil {
+			return err
+		}
+
+		encrypted, digest, err := EncryptRelayPayload(
+			cryptoState,
+			DirectionBackward,
+			framed,
+		)
+
+		if err != nil {
+			return err
+		}
+
+		relay := RelayCell{
+			CircID:   circ.InCircID,
+			StreamID: 0,
+			Command:  command,
+			Digest:   digest,
+			Length:   uint16(len(encrypted)),
+			Data:     encrypted,
+		}
+
+		cell, err := n.EncodeRelayCell(relay)
+		if err != nil {
+			return err
+		}
+
+		err = n.SendCell(circ.PrevHop, cell)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// SendFragments sends fragments one by one in a loop in a forwards direction
+func (n *node) SendFragments(frags [][]byte,
+	msgID uint16,
+	circID uint16,
+	cc *ClientCircuit,
+	cryptoStates []*CircuitCryptoState,
+	command uint8) error {
+
+	for i, chunk := range frags {
+
+		framed, err := EncodeFragment(FragmentHeader{
+			MsgID: msgID,
+			Index: uint16(i),
+			Total: uint16(len(frags)),
+		}, chunk)
+
+		if err != nil {
+			return err
+		}
+
+		encrypted, digest, err := EncryptRelayCellThroughCircuit(cryptoStates, framed)
+		if err != nil {
+			return err
+		}
+
+		relay := RelayCell{
+			CircID:   circID,
+			StreamID: 0,
+			Command:  command,
+			Digest:   digest,
+			Length:   uint16(len(encrypted)),
+			Data:     encrypted,
+		}
+
+		cell, err := n.EncodeRelayCell(relay)
+		if err != nil {
+			return err
+		}
+
+		err = n.SendCell(cc.Hops[0], cell)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 // EncodeServiceDescriptor encodes a service descriptor into a relay payload
 func EncodeServiceDescriptor(desc *ServiceDescriptor) ([]byte, error) {
 	buf := bytes.NewBuffer(nil)
@@ -298,10 +503,6 @@ func EncodeServiceDescriptor(desc *ServiceDescriptor) ([]byte, error) {
 	_, err = buf.Write(desc.Signature)
 	if err != nil {
 		return nil, err
-	}
-
-	if buf.Len() > RelayPayloadLen {
-		return nil, fmt.Errorf("service descriptor too large (%d bytes)", buf.Len())
 	}
 
 	return buf.Bytes(), nil
@@ -391,7 +592,21 @@ func (n *node) HandleRelayHSDirPublish(relay RelayCell, circ *Circuit) error {
 		return nil // ignore
 	}
 
-	desc, err := DecodeServiceDescriptor(relay.Data)
+	hdr, chunk, err := DecodeFragment(relay.Data)
+	if err != nil {
+		return err
+	}
+
+	full, done, err := n.AddFragment(circ.InCircID, hdr.MsgID, hdr.Index, hdr.Total, chunk)
+
+	if err != nil {
+		return err
+	}
+	if !done {
+		return nil // wait for more fragments
+	}
+
+	desc, err := DecodeServiceDescriptor(full)
 	if err != nil {
 		return err
 	}
@@ -475,27 +690,21 @@ func (n *node) HandleRelayHSDirLookup(relay RelayCell, circ *Circuit) error {
 
 // SendHSDirReply sends a reply to a lookup or publish request to the HSDir
 func (n *node) SendHSDirReply(circ *Circuit, payload []byte) error {
-	exitIdx := len(n.circuitCryptoStates[circ.InCircID]) - 1
-	cryptoState := n.circuitCryptoStates[circ.InCircID][exitIdx]
-
-	encrypted, digest, err := EncryptRelayPayload(cryptoState, DirectionBackward, payload)
+	msgID, err := n.GenerateMsgID()
 	if err != nil {
 		return err
 	}
 
-	relay := RelayCell{
-		CircID:   circ.InCircID,
-		StreamID: 0,
-		Command:  RelayHSDirReply,
-		Digest:   digest,
-		Length:   uint16(len(encrypted)),
-		Data:     encrypted,
+	maxChunk := RelayPayloadLen - FragmentHeaderLen
+	frags := SplitPayload(payload, maxChunk)
+
+	if len(frags) == 0 {
+		frags = [][]byte{[]byte{}}
 	}
-	cell, err := n.EncodeRelayCell(relay)
-	if err != nil {
-		return err
-	}
-	return n.SendCell(circ.PrevHop, cell)
+
+	cryptoState := n.circuitCryptoStates[circ.InCircID][len(n.circuitCryptoStates[circ.InCircID])-1]
+
+	return n.SendFragmentsBackward(frags, msgID, circ, cryptoState, RelayHSDirReply)
 }
 
 // PublishDescriptorToHSDir implement peer.TorHiddenServices
@@ -515,31 +724,25 @@ func (n *node) PublishDescriptorToHSDir(serviceID string,
 		return err
 	}
 
+	maxChunk := RelayPayloadLen - FragmentHeaderLen
+	frags := SplitPayload(payload, maxChunk)
+
+	if len(frags) == 0 {
+		return fmt.Errorf("empty descriptor payload")
+	}
+
+	msgID, err := n.GenerateMsgID()
+	if err != nil {
+		return err
+	}
+
 	cryptoStates := n.circuitCryptoStates[circID]
-	encrypted, digest, err := EncryptRelayCellThroughCircuit(cryptoStates, payload)
-	if err != nil {
-		return err
-	}
-
-	relay := RelayCell{
-		CircID:   circID,
-		StreamID: 0,
-		Command:  RelayHSDirPublish,
-		Digest:   digest,
-		Length:   uint16(len(encrypted)),
-		Data:     encrypted,
-	}
-	cell, err := n.EncodeRelayCell(relay)
-	if err != nil {
-		return err
-	}
-
 	cc := n.clientCircuits[circID]
 
-	n.log.Info().
-		Str("serviceID", serviceID).
-		Uint16("circID", circID).
-		Msg("Client publishing descriptor to HSDir")
+	err = n.SendFragments(frags, msgID, circID, cc, cryptoStates, RelayHSDirPublish)
+	if err != nil {
+		return err
+	}
 
 	replyCh := make(chan *ServiceDescriptor, 1)
 
@@ -547,10 +750,12 @@ func (n *node) PublishDescriptorToHSDir(serviceID string,
 	n.hsdirWait[circID] = replyCh
 	n.hsdirWaitMu.Unlock()
 
-	err = n.SendCell(cc.Hops[0], cell)
-	if err != nil {
-		return err
-	}
+	n.log.Info().Msgf("Sending %d fragments to HSDir", len(frags))
+
+	n.log.Info().
+		Str("serviceID", serviceID).
+		Uint16("circID", circID).
+		Msg("Client publishing descriptor to HSDir")
 
 	select {
 	case <-replyCh:
@@ -647,28 +852,39 @@ func (n *node) LookupDescriptor(circID uint16, serviceID string, timeout time.Du
 func (n *node) HandleRelayHSDirReply(relay RelayCell) error {
 	n.hsdirWaitMu.Lock()
 	ch := n.hsdirWait[relay.CircID]
-	delete(n.hsdirWait, relay.CircID)
 	n.hsdirWaitMu.Unlock()
 
 	if ch == nil {
 		return nil
 	}
 
-	if len(relay.Data) == 0 {
+	cryptoStates := n.circuitCryptoStates[relay.CircID]
+	plaintext := decryptRelayDataAtClient(cryptoStates, relay.Data, relay.Digest)
+
+	hdr, chunk, err := DecodeFragment(plaintext)
+	if err != nil {
+		return err
+	}
+
+	full, done, err := n.AddFragment(relay.CircID, hdr.MsgID, hdr.Index, hdr.Total, chunk)
+	if err != nil {
+		return err
+	}
+	if !done {
+		return nil
+	}
+
+	n.hsdirWaitMu.Lock()
+	delete(n.hsdirWait, relay.CircID)
+	n.hsdirWaitMu.Unlock()
+
+	if len(full) == 0 {
 		ch <- nil
 		return nil //reply for building a service descriptor
 	}
 
-	cryptoStates := n.circuitCryptoStates[relay.CircID]
-	if len(cryptoStates) == 0 {
-		return fmt.Errorf("no crypto states for circuit %d", relay.CircID)
-	}
-
-	plaintext := decryptRelayDataAtClient(cryptoStates, relay.Data, relay.Digest)
-
-	desc, err := DecodeServiceDescriptor(plaintext)
+	desc, err := DecodeServiceDescriptor(full)
 	if err != nil {
-		n.log.Info().Msgf("7")
 		return err
 	}
 
@@ -867,7 +1083,21 @@ func (n *node) HandleRelayHSDirDelete(relay RelayCell, circ *Circuit) error {
 		return nil // ignore
 	}
 
-	desc, err := DecodeServiceDescriptor(relay.Data)
+	hdr, chunk, err := DecodeFragment(relay.Data)
+	if err != nil {
+		return err
+	}
+
+	full, done, err := n.AddFragment(relay.CircID, hdr.MsgID, hdr.Index, hdr.Total, chunk)
+
+	if err != nil {
+		return err
+	}
+	if !done {
+		return nil // wait for more fragments
+	}
+
+	desc, err := DecodeServiceDescriptor(full)
 	if err != nil {
 		return err
 	}
@@ -911,25 +1141,19 @@ func (n *node) DeleteDescriptorFromHSDir(serviceID string, circID uint16, timeou
 		return err
 	}
 
+	maxChunk := RelayPayloadLen - FragmentHeaderLen
+	frags := SplitPayload(payload, maxChunk)
+
+	if len(frags) == 0 {
+		return fmt.Errorf("empty descriptor payload")
+	}
+
+	msgID, err := n.GenerateMsgID()
+	if err != nil {
+		return err
+	}
+
 	cryptoStates := n.circuitCryptoStates[circID]
-	encrypted, digest, err := EncryptRelayCellThroughCircuit(cryptoStates, payload)
-	if err != nil {
-		return err
-	}
-
-	relay := RelayCell{
-		CircID:   circID,
-		StreamID: 0,
-		Command:  RelayHSDirDelete,
-		Digest:   digest,
-		Length:   uint16(len(encrypted)),
-		Data:     encrypted,
-	}
-
-	cell, err := n.EncodeRelayCell(relay)
-	if err != nil {
-		return err
-	}
 
 	replyCh := make(chan *ServiceDescriptor, 1)
 
@@ -937,10 +1161,17 @@ func (n *node) DeleteDescriptorFromHSDir(serviceID string, circID uint16, timeou
 	n.hsdirWait[circID] = replyCh
 	n.hsdirWaitMu.Unlock()
 
-	err = n.SendCell(cc.Hops[0], cell)
+	n.log.Info().Msgf("Sending %d fragments to HSDir", len(frags))
+
+	err = n.SendFragments(frags, msgID, circID, cc, cryptoStates, RelayHSDirDelete)
 	if err != nil {
 		return err
 	}
+
+	n.log.Info().
+		Str("serviceID", serviceID).
+		Uint16("circID", circID).
+		Msg("Client deleting descriptor to HSDir")
 
 	select {
 	case <-replyCh:
