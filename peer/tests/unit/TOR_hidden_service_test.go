@@ -679,6 +679,7 @@ func Test_TOR_HS_Descriptor_Fragmentation(t *testing.T) {
 	require.NoError(t, err)
 
 	clientOutsBefore := len(client.GetOuts())
+	hsdirInsBefore := len(hsDir.GetIns())
 
 	serviceID, err := client.Peer.GenerateHiddenServiceID()
 	require.NoError(t, err)
@@ -706,14 +707,17 @@ func Test_TOR_HS_Descriptor_Fragmentation(t *testing.T) {
 		clientOutsBefore+1,
 		"descriptor publish should span multiple relay cells",
 	)
+	require.Greater(t, len(hsDir.GetIns()), hsdirInsBefore+1, "should have received multiple relay cells")
 
 	clientInsBefore := len(client.GetIns())
+	hsdirOutsBefore := len(hsDir.GetOuts())
 	// Lookup descriptor
 	ok, found := client.Peer.LookupDescriptor(
 		circID,
 		serviceID,
 		time.Second,
 	)
+	require.Greater(t, len(hsDir.GetOuts()), hsdirOutsBefore+1, "should have sent multiple relay cells")
 	require.Greater(t, len(client.GetIns()), clientInsBefore+1, "should have received multiple relay cells")
 
 	require.True(t, ok)
