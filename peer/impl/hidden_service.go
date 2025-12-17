@@ -891,7 +891,7 @@ func (n *node) DeleteHiddenService(serviceID string) error {
 	return nil
 }
 
-// PrepareRendezvousPoint implements peer.TorHiddenServices
+// PrepareRendezvousPoint implements peer.TorRendezvous
 func (n *node) PrepareRendezvousPoint(circID uint16, timeout time.Duration) (cookie [CookieSize]byte, err error) {
 	rendezvousCookie := make([]byte, CookieSize)
 	_, err = rand.Read(rendezvousCookie) // generate a random cookie
@@ -1045,7 +1045,7 @@ func (n *node) HandleRelayEstablishRP(relay RelayCell, circ *Circuit) error {
 	return nil
 }
 
-// GetRendezvousEntriesCount implements peer.TorHiddenServices
+// GetRendezvousEntriesCount implements peer.TorRendezvous
 func (n *node) GetRendezvousEntriesCount() int {
 	n.rendezvousEntryMu.Lock()
 	defer n.rendezvousEntryMu.Unlock()
@@ -1462,7 +1462,7 @@ func (n *node) HandleRelayIntroduce1(relay RelayCell, circ *Circuit) error {
 	return nil
 }
 
-// IntroduceToHiddenService implements peer.TorHiddenServices
+// IntroduceToHiddenService implements peer.TorClientIntroduction
 func (n *node) IntroduceToHiddenService(circID uint16, serviceID string,
 	servicePubKey []byte, cookie [CookieSize]byte, rendezvousAddr string, timeout time.Duration) error {
 	n.introAckMu.Lock()
