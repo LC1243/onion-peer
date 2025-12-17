@@ -43,14 +43,14 @@ const (
 	RelayEstablishIntro   = 12 // Bob -> OR
 	RelayIntroEstablished = 13 // NEW: OR -> Bob (ACK)
 	RelayIntroduce1       = 14 // Alice -> Intro Point (intro message)
-	RelayRendezvous1      = 15 // Bob -> RP (cookie + DH half + H(K))
-	RelayEstablishRP      = 16 // Alice -> RP (associate cookie with her circuit)
-	RelayHSDirPublish     = 17
-	RelayHSDirLookup      = 18
-	RelayHSDirReply       = 19
-	RelayRPEstablished    = 20 // RP -> Alice (ACK)
-	RelayIntroduceACK     = 21 // Intro Point -> Alice (ACK)
-	RelayIntroduce2       = 22 // RP -> Bob (intro message)
+	RelayIntroduce2       = 15 // RP -> Bob (intro message)
+	RelayIntroduceACK     = 16 // Intro Point -> Alice (ACK)
+	RelayRendezvous1      = 17 // Bob -> RP (cookie + DH half + H(K))
+	RelayEstablishRP      = 18 // Alice -> RP (associate cookie with her circuit)
+	RelayRPEstablished    = 19 // RP -> Alice (ACK)
+	RelayHSDirPublish     = 20
+	RelayHSDirLookup      = 21
+	RelayHSDirReply       = 22
 )
 
 // CookieSize Cookie size in bytes for rendezvous points
