@@ -1462,8 +1462,8 @@ func (n *node) HandleRelayIntroduce1(relay RelayCell, circ *Circuit) error {
 	return nil
 }
 
-// SendIntroduce1AndWaitForACK sends an introduce1 message and waits for the ACK response
-func (n *node) SendIntroduce1AndWaitForACK(circID uint16, serviceID string,
+// IntroduceToHiddenService implements peer.TorHiddenServices
+func (n *node) IntroduceToHiddenService(circID uint16, serviceID string,
 	servicePubKey []byte, cookie [CookieSize]byte, rendezvousAddr string, timeout time.Duration) error {
 	n.introAckMu.Lock()
 	ackCh := make(chan struct{})
