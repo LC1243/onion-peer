@@ -1018,7 +1018,7 @@ func (n *node) GetIntroPointStateCount(serviceID string) int {
 }
 
 // CreateHiddenService implements peer.TorHiddenServices
-func (n *node) CreateHiddenService(introPoints [][3]string,
+func (n *node) CreateHiddenService(introPoints [][]string,
 	timeout time.Duration,
 	lifetime time.Duration,
 	IntroCircID uint16) (string, []uint16, error) {

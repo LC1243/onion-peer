@@ -42,7 +42,7 @@ func Test_TOR_FlowControl_Circuit_Level_Single(t *testing.T) {
 	z.PopulateOnionKeys(nodes)
 
 	// Build Circuit
-	hops := [3]string{guard.GetAddr(), middle.GetAddr(), exit.GetAddr()}
+	hops := []string{guard.GetAddr(), middle.GetAddr(), exit.GetAddr()}
 	circID, err := client.BuildCircuit(hops, 30*time.Second)
 	require.NoError(t, err, "Failed to build circuit")
 
@@ -116,7 +116,7 @@ func Test_TOR_FlowControl_Circuit_Level_Multiple_Clients(t *testing.T) {
 	// Populate onion keys for all nodes
 	z.PopulateOnionKeys(nodes)
 
-	hops := [3]string{guard.GetAddr(), middle.GetAddr(), exit.GetAddr()}
+	hops := []string{guard.GetAddr(), middle.GetAddr(), exit.GetAddr()}
 
 	// Build circuits
 	circID1, err := client1.BuildCircuit(hops, 30*time.Second)

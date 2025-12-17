@@ -12,24 +12,27 @@ import (
 	"go.dedis.ch/cs438/transport/udp"
 )
 
-// Build3HopCircuit builds a 3-hop circuit for use by stream tests.
-func Build3HopCircuit(t *testing.T) (client, guard, middle, exit z.TestNode, circID uint16) {
+// BuildNHopCircuit builds n-hop circuit to be used in tests.
+// relays includes the middle nodes and the exit node.
+func BuildNHopCircuit(t *testing.T, n int) (client z.TestNode, relays []z.TestNode, exit z.TestNode, circID uint16) {
+	require.GreaterOrEqual(t, n, 3)
 	transp := channelFac()
 
 	client = z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
-	guard = z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
-	middle = z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
-	exit = z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+
+	relays = make([]z.TestNode, n)
+	for i := 0; i < n; i++ {
+		relays[i] = z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	}
 
 	t.Cleanup(func() {
-		client.Stop()
-		guard.Stop()
-		middle.Stop()
-		exit.Stop()
+		for _, node := range relays {
+			node.Stop()
+		}
 	})
 
 	// Full mesh routing
-	nodes := []z.TestNode{client, guard, middle, exit}
+	nodes := append([]z.TestNode{client}, relays...)
 	for i, n1 := range nodes {
 		for j, n2 := range nodes {
 			if i != j {
@@ -43,13 +46,17 @@ func Build3HopCircuit(t *testing.T) (client, guard, middle, exit z.TestNode, cir
 	// Populate onion keys
 	z.PopulateOnionKeys(nodes)
 
-	hops := [3]string{guard.GetAddr(), middle.GetAddr(), exit.GetAddr()}
+	hops := make([]string, n)
+	for i := 0; i < n; i++ {
+		hops[i] = relays[i].GetAddr()
+	}
 
 	var err error
 	circID, err = client.Peer.BuildCircuit(hops, 5*time.Second)
 	require.NoError(t, err)
 
-	return client, guard, middle, exit, circID
+	exit = relays[n-1]
+	return client, relays, exit, circID
 }
 
 // getExitCircuitIDWithStreams returns the circuit ID for the exit node that contains streams
@@ -78,7 +85,7 @@ func assertExitHasNoStreams(t *testing.T, exit z.TestNode) {
 
 // Test opening a stream end-to-end
 func Test_TOR_Stream_Open_Succeeds(t *testing.T) {
-	client, _, _, _, circID := Build3HopCircuit(t)
+	client, _, _, circID := BuildNHopCircuit(t, 4)
 
 	streamID, err := client.Peer.OpenStream(circID, "dummy-target:9999")
 	require.NoError(t, err, "OpenStream should succeed")
@@ -89,7 +96,7 @@ func Test_TOR_Stream_Open_Succeeds(t *testing.T) {
 
 // Test closing a stream cleanly with the two-way RELAY_END handshake
 func Test_TOR_Stream_Close_Clean_Shutdown(t *testing.T) {
-	client, _, _, exit, circID := Build3HopCircuit(t)
+	client, _, exit, circID := BuildNHopCircuit(t, 4)
 
 	streamID, err := client.Peer.OpenStream(circID, "app:7777")
 	require.NoError(t, err)
@@ -111,7 +118,7 @@ func Test_TOR_Stream_Close_Clean_Shutdown(t *testing.T) {
 
 // Test double-closing stream — second close must not crash
 func Test_TOR_Stream_Close_Twice_NoPanic(t *testing.T) {
-	client, _, _, exit, circID := Build3HopCircuit(t)
+	client, _, exit, circID := BuildNHopCircuit(t, 3)
 
 	streamID, err := client.Peer.OpenStream(circID, "service:5050")
 	require.NoError(t, err)
@@ -133,7 +140,7 @@ func Test_TOR_Stream_Close_Twice_NoPanic(t *testing.T) {
 
 // Multiple streams on the same circuit should work
 func Test_TOR_Multiple_Streams_On_Same_Circuit(t *testing.T) {
-	client, _, _, exit, circID := Build3HopCircuit(t)
+	client, _, exit, circID := BuildNHopCircuit(t, 3)
 
 	stream1, err := client.Peer.OpenStream(circID, "host1:1111")
 	require.NoError(t, err)
@@ -153,7 +160,7 @@ func Test_TOR_Multiple_Streams_On_Same_Circuit(t *testing.T) {
 }
 
 func Test_TOR_Multiple_Streams_With_Single_Close(t *testing.T) {
-	client, _, _, exit, circID := Build3HopCircuit(t)
+	client, _, exit, circID := BuildNHopCircuit(t, 5)
 
 	stream1, err := client.Peer.OpenStream(circID, "host1:1111")
 	require.NoError(t, err)
@@ -202,7 +209,7 @@ func Test_TOR_Stream_Open_Fails_When_Exit_Cannot_Open_Socket(t *testing.T) {
 	})
 	t.Cleanup(func() { impl.SetUDPFactory(udp.NewUDP) })
 
-	client, _, _, exit, circID := Build3HopCircuit(t)
+	client, _, exit, circID := BuildNHopCircuit(t, 5)
 
 	_, _ = client.Peer.OpenStream(circID, "nowhere:1234")
 
@@ -230,7 +237,7 @@ func (fakeFailingTransport) Close() error                { return nil }
 // Test_TOR_Stream_FlowControl tests that stream-level flow control works
 // by sending more data than the initial stream window (500 cells).
 func Test_TOR_Stream_FlowControl(t *testing.T) {
-	client, _, _, _, circID := Build3HopCircuit(t)
+	client, _, _, circID := BuildNHopCircuit(t, 3)
 
 	// Open stream
 	streamID, err := client.Peer.OpenStream(circID, "dummy:1234")

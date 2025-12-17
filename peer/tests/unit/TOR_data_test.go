@@ -25,7 +25,7 @@ const DefaultPacketsPerStream = 8
 // Verifies that data sent by client is received by exit node and echoed back
 func Test_TOR_Data_Transfer_Basic(t *testing.T) {
 	// Use helper to build circuit
-	client, _, _, exit, circID := Build3HopCircuit(t)
+	client, _, exit, circID := BuildNHopCircuit(t, 5)
 	var _ z.TestNode = client // Ensure z import is used
 
 	// Open a stream
@@ -78,7 +78,8 @@ func Test_TOR_Data_Transfer_Basic(t *testing.T) {
 // Test_TOR_Data_Transfer_Multiple_Packets tests sending multiple packets
 // and verifying that all are received correctly by exit and echoed back to client
 func Test_TOR_Data_Transfer_Multiple_Packets(t *testing.T) {
-	client, _, _, exit, circID := Build3HopCircuit(t)
+	client, _, exit, circID := BuildNHopCircuit(t, 3)
+
 	streamID, err := client.OpenStream(circID, "host:1111")
 	require.NoError(t, err)
 	time.Sleep(200 * time.Millisecond)
@@ -129,7 +130,7 @@ func Test_TOR_Data_Transfer_Multiple_Packets(t *testing.T) {
 
 // Test_TOR_Data_Transfer_Packet_Count verifies accurate packet counting
 func Test_TOR_Data_Transfer_Packet_Count(t *testing.T) {
-	client, _, _, exit, circID := Build3HopCircuit(t)
+	client, _, exit, circID := BuildNHopCircuit(t, 3)
 
 	streamID, err := client.OpenStream(circID, "host:1111")
 	require.NoError(t, err)
@@ -166,7 +167,7 @@ func Test_TOR_Data_Transfer_Packet_Count(t *testing.T) {
 
 // Test_TOR_Data_Transfer_Error_Cases tests error conditions
 func Test_TOR_Data_Transfer_Error_Cases(t *testing.T) {
-	client, _, _, _, circID := Build3HopCircuit(t)
+	client, _, _, circID := BuildNHopCircuit(t, 3)
 
 	// Try to send on non-existent stream
 	err := client.SendStreamData(circID, 12345, []byte("Should fail"))
@@ -179,7 +180,7 @@ func Test_TOR_Data_Transfer_Error_Cases(t *testing.T) {
 // Test_TOR_Data_Multiple_Streams_No_Leakage specifically tests for data isolation between streams.
 // This test focuses on ensuring that data sent on one stream does NOT appear on another stream.
 func Test_TOR_Data_Multiple_Streams_No_Leakage(t *testing.T) {
-	client, _, _, exit, circID := Build3HopCircuit(t)
+	client, _, exit, circID := BuildNHopCircuit(t, 3)
 
 	// Open 3 streams with very distinct data patterns
 	stream1, err := client.OpenStream(circID, "host1:1111")
@@ -267,7 +268,7 @@ func Test_TOR_Data_Multiple_Streams_No_Leakage(t *testing.T) {
 // 1. Data sent over each stream is correct
 // 2. No data leakage between streams and each stream only receives its own data
 func Test_TOR_Data_Multiple_Streams_Single_Circuit(t *testing.T) {
-	client, _, _, exit, circID := Build3HopCircuit(t)
+	client, _, exit, circID := BuildNHopCircuit(t, 3)
 
 	// Use configurable test parameters
 	numStreams := DefaultStreamsPerCircuit

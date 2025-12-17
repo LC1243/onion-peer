@@ -10,7 +10,7 @@ import (
 
 // Test_TOR_HS_EstablishIntroPoint_Basic tests the process of establishing an introduction point for a hidden service.
 func Test_TOR_HS_Establish_IntroPoint_Basic(t *testing.T) {
-	client, _, _, exit, circID := Build3HopCircuit(t)
+	client, _, exit, circID := BuildNHopCircuit(t, 3)
 	clientOutsBefore := client.GetOuts()
 	clientInsBefore := client.GetIns()
 	exitInsBefore := exit.GetIns()
@@ -47,7 +47,7 @@ func Test_TOR_HS_Establish_IntroPoint_Basic(t *testing.T) {
 
 // Test_TOR_HS_EstablishIntroPoint_ServiceNotFound tests the case where the hidden service does not exist.
 func Test_TOR_HS_Establish_IntroPoint_ServiceNotFound(t *testing.T) {
-	client, _, _, _, circID := Build3HopCircuit(t)
+	client, _, _, circID := BuildNHopCircuit(t, 3)
 
 	err := client.Peer.EstablishIntroPoint("nonexistent-service", circID, time.Second)
 	require.Error(t, err)
@@ -62,7 +62,7 @@ func Test_TOR_HS_Establish_IntroPoint_ServiceNotFound(t *testing.T) {
 
 // Test_TOR_HS_EstablishIntroPoint_UnknownCircuit_Error tests the case where the circuit ID is unknown.
 func Test_TOR_HS_Establish_IntroPoint_UnknownCircuit_Error(t *testing.T) {
-	client, _, _, _, _ := Build3HopCircuit(t)
+	client, _, _, _ := BuildNHopCircuit(t, 3)
 
 	serviceID, err := client.Peer.GenerateHiddenServiceID()
 	require.NoError(t, err)
@@ -123,8 +123,8 @@ func Test_TOR_HS_Establish_IntroPoint_Multiple(t *testing.T) {
 	z.PopulateOnionKeys(nodes)
 
 	// Build two circuits on the SAME client, but with different exits
-	hops1 := [3]string{guard1.GetAddr(), middle1.GetAddr(), exit1.GetAddr()}
-	hops2 := [3]string{guard2.GetAddr(), middle2.GetAddr(), exit2.GetAddr()}
+	hops1 := []string{guard1.GetAddr(), middle1.GetAddr(), exit1.GetAddr()}
+	hops2 := []string{guard2.GetAddr(), middle2.GetAddr(), exit2.GetAddr()}
 
 	circID1, err := client.Peer.BuildCircuit(hops1, 5*time.Second)
 	require.NoError(t, err)
@@ -176,7 +176,7 @@ func Test_TOR_HS_Establish_IntroPoint_Multiple(t *testing.T) {
 
 // Test_TOR_HS_DescriptorExpired tests the case where a hidden service descriptor expires.
 func Test_TOR_HS_Descriptor_Expired(t *testing.T) {
-	client, _, _, exit, circID := Build3HopCircuit(t)
+	client, _, exit, circID := BuildNHopCircuit(t, 5)
 
 	exit.Peer.SetPeerAsHSDir(true)
 
@@ -240,7 +240,7 @@ func Test_TOR_HS_Descriptor_Publish_AndLookup(t *testing.T) {
 
 	// Publisher circuit
 	publishCircID, err := client.Peer.BuildCircuit(
-		[3]string{guard.GetAddr(), middle.GetAddr(), exit.GetAddr()},
+		[]string{guard.GetAddr(), middle.GetAddr(), exit.GetAddr()},
 		5*time.Second,
 	)
 	require.NoError(t, err)
@@ -261,7 +261,7 @@ func Test_TOR_HS_Descriptor_Publish_AndLookup(t *testing.T) {
 
 	// Lookup circuit (different client)
 	lookupCircID, err := lookupClient.Peer.BuildCircuit(
-		[3]string{guard.GetAddr(), middle.GetAddr(), exit.GetAddr()},
+		[]string{guard.GetAddr(), middle.GetAddr(), exit.GetAddr()},
 		5*time.Second,
 	)
 	require.NoError(t, err)
@@ -317,14 +317,14 @@ func Test_TOR_HS_Create_HiddenService_Basic(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 	z.PopulateOnionKeys(nodes)
 
-	hops := [3]string{
+	hops := []string{
 		hsGuard.GetAddr(), hsMiddle.GetAddr(), hsDir.GetAddr(),
 	}
 
 	introCircID, err := client.Peer.BuildCircuit(hops, 5*time.Second)
 	require.NoError(t, err)
 
-	introHops := [][3]string{
+	introHops := [][]string{
 		{guard.GetAddr(), middle.GetAddr(), exit.GetAddr()},
 	}
 
@@ -411,14 +411,14 @@ func Test_TOR_HS_Create_HiddenService_MultipleIntroPoints(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 	z.PopulateOnionKeys(nodes)
 
-	hops := [3]string{
+	hops := []string{
 		hsGuard.GetAddr(), hsMiddle.GetAddr(), hsDir.GetAddr(),
 	}
 
 	introCircID, err := client.Peer.BuildCircuit(hops, 5*time.Second)
 	require.NoError(t, err)
 
-	introPaths := [][3]string{
+	introPaths := [][]string{
 		{guard1.GetAddr(), middle1.GetAddr(), exit1.GetAddr()},
 		{guard2.GetAddr(), middle2.GetAddr(), exit2.GetAddr()},
 	}
@@ -448,7 +448,7 @@ func Test_TOR_HS_Create_HiddenService_MultipleIntroPoints(t *testing.T) {
 
 	for _, lc := range lookupClients {
 		circID, err := lc.Peer.BuildCircuit(
-			[3]string{guard1.GetAddr(), middle1.GetAddr(), hsDir.GetAddr()},
+			[]string{guard1.GetAddr(), middle1.GetAddr(), hsDir.GetAddr()},
 			5*time.Second,
 		)
 		require.NoError(t, err)
@@ -505,7 +505,7 @@ func Test_TOR_HS_Delete_HiddenService_Basic(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 	z.PopulateOnionKeys(nodes)
 
-	hops := [3]string{
+	hops := []string{
 		hsGuard.GetAddr(), hsMiddle.GetAddr(), hsDir.GetAddr(),
 	}
 
@@ -514,7 +514,7 @@ func Test_TOR_HS_Delete_HiddenService_Basic(t *testing.T) {
 
 	// Create HS with one intro point
 	serviceID, circuits, err := client.Peer.CreateHiddenService(
-		[][3]string{
+		[][]string{
 			{guard.GetAddr(), middle.GetAddr(), exit.GetAddr()},
 		},
 		5*time.Second,
@@ -588,7 +588,7 @@ func Test_TOR_HS_Delete_HiddenService_MultipleIntroPoints(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 	z.PopulateOnionKeys(nodes)
 
-	hops := [3]string{
+	hops := []string{
 		hsGuard.GetAddr(), hsMiddle.GetAddr(), hsDir.GetAddr(),
 	}
 
@@ -596,7 +596,7 @@ func Test_TOR_HS_Delete_HiddenService_MultipleIntroPoints(t *testing.T) {
 	require.NoError(t, err)
 
 	serviceID, circuits, err := client.Peer.CreateHiddenService(
-		[][3]string{
+		[][]string{
 			{guard1.GetAddr(), middle1.GetAddr(), exit1.GetAddr()},
 			{guard2.GetAddr(), middle2.GetAddr(), exit2.GetAddr()},
 		},
@@ -634,7 +634,7 @@ func Test_TOR_HS_Delete_HiddenService_MultipleIntroPoints(t *testing.T) {
 
 // Test_TOR_HS_DeleteHiddenService_NotFound tests deleting a non-existent hidden service
 func Test_TOR_HS_Delete_HiddenService_NotFound(t *testing.T) {
-	client, _, _, _, circID := Build3HopCircuit(t)
+	client, _, _, circID := BuildNHopCircuit(t, 4)
 
 	err := client.Peer.DeleteHiddenService("non-existent-service", circID)
 	require.Error(t, err)
@@ -673,7 +673,7 @@ func Test_TOR_HS_Descriptor_Fragmentation(t *testing.T) {
 
 	// Build circuit to HSDir
 	circID, err := client.Peer.BuildCircuit(
-		[3]string{guard.GetAddr(), middle.GetAddr(), hsDir.GetAddr()},
+		[]string{guard.GetAddr(), middle.GetAddr(), hsDir.GetAddr()},
 		5*time.Second,
 	)
 	require.NoError(t, err)

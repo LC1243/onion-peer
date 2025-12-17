@@ -23,7 +23,7 @@ type Tor interface {
 	// hops must contain exactly 3 addresses: [Guard, Middle, Exit].
 	// Blocks until the circuit is ready or timeout.
 	// Returns the circuit ID on success.
-	BuildCircuit(hops [3]string, timeout time.Duration) (uint16, error)
+	BuildCircuit(hops []string, timeout time.Duration) (uint16, error)
 
 	// GetOnionPublicKey returns this node's public onion key.
 	// Used for Tor-like circuit creation.
@@ -112,7 +112,7 @@ type TorHiddenServices interface {
 	// CreateHiddenService creates a full hidden service
 	// Create the service locally, establishes intro points by building circuits into them,
 	// and builds a descriptor, which is published to the HSDir, which we already have a circuit to with IntroCircID.
-	CreateHiddenService(introPoints [][3]string,
+	CreateHiddenService(introPoints [][]string,
 		timeout time.Duration,
 		lifetime time.Duration,
 		IntroCircID uint16) (string, []uint16, error)
