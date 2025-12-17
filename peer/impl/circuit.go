@@ -1,7 +1,6 @@
 package impl
 
 import (
-	"crypto/sha256"
 	"errors"
 	"fmt"
 	"math/rand"
@@ -296,6 +295,10 @@ func (n *node) HandleRelayAsOP(cell Cell, src string, cc *ClientCircuit) error {
 
 // HandleRelaySendmeAsOP handles a RelaySendme command when acting as OP
 func (n *node) HandleRelaySendmeAsOP(relayCell RelayCell, cc *ClientCircuit) error {
+	if !n.congestionControl {
+		return nil
+	}
+
 	if relayCell.StreamID != 0 {
 		// Stream-level flow control
 		stream, err := n.validateStreamForData(cc.CircID, relayCell.StreamID)
@@ -410,40 +413,38 @@ func (n *node) HandleForwardRelay(cell Cell, circ *Circuit) error {
 		return fmt.Errorf("no crypto state found for circuit %d", circ.InCircID)
 	}
 
-	// Decrypt one layer using our crypto state
-	decryptedData, err := DecryptRelayPayload(cryptoStates[0], DirectionForward, relayCell.Data, relayCell.Digest)
-	if err != nil {
-		return fmt.Errorf("failed to decrypt relay cell data: %w", err)
-	}
+	// Try to decrypt and check if this cell is for this node using digest verification
+	// The digest check determines if this is the intended recipient
+	decryptedData, isForUs := DecryptRelayCellAtHop(cryptoStates[0], DirectionForward, relayCell.Data, relayCell.Digest)
 
-	if circ.NextHop == "" {
-		// We are the end of the circuit, process the relay command
+	if isForUs {
+		// Digest matched so, we are the intended destination
+		n.log.Info().
+			Uint16("circID", circ.InCircID).
+			Uint8("command", relayCell.Command).
+			Msg("Digest matched and processing relay command")
+
 		// Replace the encrypted Data with decrypted plaintext
 		relayCell.Data = decryptedData
 		return n.HandleRelayAtEndpoint(relayCell, circ)
 	}
 
+	// Digest didn't match so, this cell has to be forwarded
 	n.log.Info().
 		Uint16("circID", circ.InCircID).
 		Str("nextHop", circ.NextHop).
-		Msg("Forwarding Decrypted relay cell to next hop")
+		Msg("Digest mismatch; forwarding relay cell to next hop")
 
+	if circ.NextHop == "" {
+		return fmt.Errorf("digest mismatch but no next hop to forward to")
+	}
 	// We are an intermediate node, forward the decrypted data to NextHop
 
 	// Flow Control: Relays do not decrement the circuit window for cells that they are just relaying
 	// So we do NOT decrement PackageWindow here
 
-	// Recompute digest for the decrypted data
-	h := sha256.New()
-	h.Write(cryptoStates[0].ForwardDigest)
-	h.Write(decryptedData)
-	hash := h.Sum(nil)
-	var newDigest [6]byte
-	copy(newDigest[:], hash[:6])
-
-	// Re-encode the relay cell with the decrypted data and new digest
+	// Forward the decrypted data to NextHop
 	relayCell.Data = decryptedData
-	relayCell.Digest = newDigest
 	relayCell.Length = uint16(len(decryptedData))
 	relayCell.CircID = circ.OutCircID
 	forwardCell, err := n.EncodeRelayCell(relayCell)
@@ -478,6 +479,8 @@ func (n *node) HandleRelayAtEndpoint(relayCell RelayCell, circ *Circuit) error {
 		return n.HandleRelayHSDirPublish(relayCell, circ)
 	case RelayHSDirLookup:
 		return n.HandleRelayHSDirLookup(relayCell, circ)
+	case RelayHSDirDelete:
+		return n.HandleRelayHSDirDelete(relayCell, circ)
 	case RelayEstablishRP:
 		return n.HandleRelayEstablishRP(relayCell, circ)
 	case RelayIntroduceACK:
@@ -994,15 +997,14 @@ func (n *node) HandleRelayExtendedAsOP(relayCell RelayCell) error {
 		if len(cryptoStates) == 0 {
 			return fmt.Errorf("no crypto states found for circuit %d", circID)
 		}
-		relayExtendedPayloadPlainText, err := DecryptRelayPayload(
+
+		// Decrypt through guard layer
+		relayExtendedPayloadPlainText, _ := DecryptRelayCellAtHop(
 			cryptoStates[0],
 			DirectionBackward,
 			relayCell.Data,
-			relayCell.Digest,
+			[6]byte{}, // dummy digest as verification in backward direction is not needed
 		)
-		if err != nil {
-			return fmt.Errorf("failed to decrypt relay extended payload for circuit %d: %w", circID, err)
-		}
 
 		// Complete the handshake as the initiator for the Middle node
 		circuitCryptoState, err := n.FinishHandshakeAsInitiator(
@@ -1036,14 +1038,14 @@ func (n *node) HandleRelayExtendedAsOP(relayCell RelayCell) error {
 			cryptoStates[1],
 			DirectionBackward,
 			relayCell.Data,
-			relayCell.Digest,
+			[6]byte{}, // dummy digest
 		)
 
 		relayExtendedPayloadPlainText, _ = DecryptRelayCellAtHop(
 			cryptoStates[0],
 			DirectionBackward,
 			relayExtendedPayloadPlainText,
-			relayCell.Digest,
+			[6]byte{}, // dummy digest
 		)
 
 		// Complete the handshake as the initiator for the Exit node
@@ -1232,10 +1234,12 @@ func (n *node) SendRelayEndAsClient(circID, streamID uint16) error {
 func (n *node) SendExtendToHop(cc *ClientCircuit, nextHop string) error {
 	// Flow Control: Check and decrement PackageWindow
 	// NOTE: Caller (HandleCreatedAsOP or HandleRelayExtendedAsOP) already holds n.clientCircuitsMu
-	for cc.PackageWindow <= 0 {
-		cc.WindowCond.Wait()
+	if n.congestionControl {
+		for cc.PackageWindow <= 0 {
+			cc.WindowCond.Wait()
+		}
+		cc.PackageWindow--
 	}
-	cc.PackageWindow--
 
 	// Get the public onion key for the next hop
 	nextHopPublicKey, err := n.GetPeerPublicOnionKey(nextHop)
@@ -1753,6 +1757,11 @@ func (n *node) GetClientCircuitsNbr() int {
 	return len(n.clientCircuits)
 }
 
+// SetCongestionControl enables or disables congestion control.
+func (n *node) SetCongestionControl(enable bool) {
+	n.congestionControl = enable
+}
+
 // HasStream reports whether a stream exists for a client circuit
 func (n *node) HasStream(circID, streamID uint16) bool {
 	n.streamsMu.RLock()
@@ -2016,12 +2025,14 @@ func (n *node) SendStreamData(circID, streamID uint16, data []byte) error {
 	}
 
 	// Stream Flow Control: Check and decrement Stream PackageWindow
-	stream.mu.Lock()
-	for stream.PackageWindow <= 0 {
-		stream.WindowCond.Wait()
+	if n.congestionControl {
+		stream.mu.Lock()
+		for stream.PackageWindow <= 0 {
+			stream.WindowCond.Wait()
+		}
+		stream.PackageWindow--
+		stream.mu.Unlock()
 	}
-	stream.PackageWindow--
-	stream.mu.Unlock()
 
 	// Get client circuit and crypto states
 	n.clientCircuitsMu.Lock()
@@ -2032,10 +2043,12 @@ func (n *node) SendStreamData(circID, streamID uint16, data []byte) error {
 	}
 
 	// Flow Control: Check and decrement PackageWindow
-	for cc.PackageWindow <= 0 {
-		cc.WindowCond.Wait()
+	if n.congestionControl {
+		for cc.PackageWindow <= 0 {
+			cc.WindowCond.Wait()
+		}
+		cc.PackageWindow--
 	}
-	cc.PackageWindow--
 
 	cryptoStates := n.circuitCryptoStates[circID]
 	n.clientCircuitsMu.Unlock()
@@ -2229,21 +2242,14 @@ func (n *node) sendRelaySendmeStream(circ *Circuit, streamID uint16) error {
 func decryptRelayDataAtClient(cryptoStates []*CircuitCryptoState, encryptedPayload []byte, digest [6]byte) []byte {
 	plainPayload := encryptedPayload
 	for i := range cryptoStates {
-		// FIXME: For us will not work unless digest verification is fixed
-		// It is by chance that the number of hops matches the number of decryptions needed
-		// That is why there is no more loop iterations than the number of hops
-		// So in reality, the for us check is not effective here
-		decrypted, isForUs := DecryptRelayCellAtHop(
+		// Decrypt one layer at a time without digest verification
+		// Only the innermost (original) layer has the meaningful digest
+		plainPayload, _ = DecryptRelayCellAtHop(
 			cryptoStates[i],
 			DirectionBackward,
 			plainPayload,
-			digest,
+			[6]byte{}, // dummy digest
 		)
-		plainPayload = decrypted
-		if !isForUs && i < len(cryptoStates)-1 {
-			// Not for us yet, continue unwrapping
-			continue
-		}
 	}
 	return plainPayload
 }
@@ -2258,18 +2264,20 @@ func (n *node) HandleRelayData(relay RelayCell, circ *Circuit) error {
 		Msg("Handling RELAY_DATA at exit node")
 
 	// Flow Control: Decrement DeliverWindow
-	n.circuitsMu.Lock()
-	circ.DeliverWindow--
-	shouldSend := (DefaultWindowSize - circ.DeliverWindow) >= WindowIncrement
-	if shouldSend {
-		circ.DeliverWindow += WindowIncrement
-	}
-	n.circuitsMu.Unlock()
+	if n.congestionControl {
+		n.circuitsMu.Lock()
+		circ.DeliverWindow--
+		shouldSend := (DefaultWindowSize - circ.DeliverWindow) >= WindowIncrement
+		if shouldSend {
+			circ.DeliverWindow += WindowIncrement
+		}
+		n.circuitsMu.Unlock()
 
-	if shouldSend {
-		err := n.sendRelaySendmeStream(circ, 0)
-		if err != nil {
-			n.log.Error().Err(err).Msg("Failed to send RELAY_SENDME")
+		if shouldSend {
+			err := n.sendRelaySendmeStream(circ, 0)
+			if err != nil {
+				n.log.Error().Err(err).Msg("Failed to send RELAY_SENDME")
+			}
 		}
 	}
 
@@ -2280,17 +2288,19 @@ func (n *node) HandleRelayData(relay RelayCell, circ *Circuit) error {
 	}
 
 	// Stream Flow Control: Decrement DeliverWindow
-	stream.mu.Lock()
-	stream.DeliverWindow--
-	shouldSendStreamSendme := (DefaultStreamWindowSize - stream.DeliverWindow) >= StreamWindowIncrement
-	if shouldSendStreamSendme {
-		stream.DeliverWindow += StreamWindowIncrement
-	}
-	stream.mu.Unlock()
+	if n.congestionControl {
+		stream.mu.Lock()
+		stream.DeliverWindow--
+		shouldSendStreamSendme := (DefaultStreamWindowSize - stream.DeliverWindow) >= StreamWindowIncrement
+		if shouldSendStreamSendme {
+			stream.DeliverWindow += StreamWindowIncrement
+		}
+		stream.mu.Unlock()
 
-	if shouldSendStreamSendme {
-		if err := n.sendRelaySendmeStream(circ, relay.StreamID); err != nil {
-			n.log.Error().Err(err).Msg("Failed to send stream RELAY_SENDME")
+		if shouldSendStreamSendme {
+			if err := n.sendRelaySendmeStream(circ, relay.StreamID); err != nil {
+				n.log.Error().Err(err).Msg("Failed to send stream RELAY_SENDME")
+			}
 		}
 	}
 
@@ -2307,20 +2317,22 @@ func (n *node) HandleRelayData(relay RelayCell, circ *Circuit) error {
 	// This prevents deadlocks where we wait for a SENDME that can't be processed
 	go func() {
 		// Flow Control: Decrement PackageWindow for the reply
-		n.circuitsMu.Lock()
-		for circ.PackageWindow <= 0 {
-			circ.WindowCond.Wait()
-		}
-		circ.PackageWindow--
-		n.circuitsMu.Unlock()
+		if n.congestionControl {
+			n.circuitsMu.Lock()
+			for circ.PackageWindow <= 0 {
+				circ.WindowCond.Wait()
+			}
+			circ.PackageWindow--
+			n.circuitsMu.Unlock()
 
-		// Stream Flow Control: Decrement PackageWindow for the reply
-		stream.mu.Lock()
-		for stream.PackageWindow <= 0 {
-			stream.WindowCond.Wait()
+			// Stream Flow Control: Decrement PackageWindow for the reply
+			stream.mu.Lock()
+			for stream.PackageWindow <= 0 {
+				stream.WindowCond.Wait()
+			}
+			stream.PackageWindow--
+			stream.mu.Unlock()
 		}
-		stream.PackageWindow--
-		stream.mu.Unlock()
 
 		// Send a reply back to the client with the same payload
 		// ASSUMPTION: exit node is the last hop, so use the last crypto state
@@ -2354,18 +2366,20 @@ func (n *node) HandleRelayDataAsOP(relay RelayCell, cc *ClientCircuit) error {
 		Msg("Handling RELAY_DATA as client")
 
 	// Flow Control: Decrement DeliverWindow
-	n.clientCircuitsMu.Lock()
-	cc.DeliverWindow--
-	shouldSend := (DefaultWindowSize - cc.DeliverWindow) >= WindowIncrement
-	if shouldSend {
-		cc.DeliverWindow += WindowIncrement
-	}
-	n.clientCircuitsMu.Unlock()
+	if n.congestionControl {
+		n.clientCircuitsMu.Lock()
+		cc.DeliverWindow--
+		shouldSend := (DefaultWindowSize - cc.DeliverWindow) >= WindowIncrement
+		if shouldSend {
+			cc.DeliverWindow += WindowIncrement
+		}
+		n.clientCircuitsMu.Unlock()
 
-	if shouldSend {
-		err := n.sendRelaySendmeStreamAsOP(cc, 0)
-		if err != nil {
-			n.log.Error().Err(err).Msg("Failed to send RELAY_SENDME")
+		if shouldSend {
+			err := n.sendRelaySendmeStreamAsOP(cc, 0)
+			if err != nil {
+				n.log.Error().Err(err).Msg("Failed to send RELAY_SENDME")
+			}
 		}
 	}
 
@@ -2376,17 +2390,19 @@ func (n *node) HandleRelayDataAsOP(relay RelayCell, cc *ClientCircuit) error {
 	}
 
 	// Stream Flow Control: Decrement DeliverWindow
-	stream.mu.Lock()
-	stream.DeliverWindow--
-	shouldSendStreamSendme := (DefaultStreamWindowSize - stream.DeliverWindow) >= StreamWindowIncrement
-	if shouldSendStreamSendme {
-		stream.DeliverWindow += StreamWindowIncrement
-	}
-	stream.mu.Unlock()
+	if n.congestionControl {
+		stream.mu.Lock()
+		stream.DeliverWindow--
+		shouldSendStreamSendme := (DefaultStreamWindowSize - stream.DeliverWindow) >= StreamWindowIncrement
+		if shouldSendStreamSendme {
+			stream.DeliverWindow += StreamWindowIncrement
+		}
+		stream.mu.Unlock()
 
-	if shouldSendStreamSendme {
-		if err := n.sendRelaySendmeStreamAsOP(cc, relay.StreamID); err != nil {
-			n.log.Error().Err(err).Msg("Failed to send stream RELAY_SENDME")
+		if shouldSendStreamSendme {
+			if err := n.sendRelaySendmeStreamAsOP(cc, relay.StreamID); err != nil {
+				n.log.Error().Err(err).Msg("Failed to send stream RELAY_SENDME")
+			}
 		}
 	}
 
@@ -2417,6 +2433,10 @@ func (n *node) HandleRelayDataAsOP(relay RelayCell, cc *ClientCircuit) error {
 
 // HandleRelaySendme handles a RelaySendme command
 func (n *node) HandleRelaySendme(cell RelayCell, circ *Circuit) error {
+	if !n.congestionControl {
+		return nil
+	}
+
 	if cell.StreamID != 0 {
 		// Stream-level flow control
 		stream, err := n.validateStreamForData(circ.InCircID, cell.StreamID)

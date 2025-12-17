@@ -41,8 +41,7 @@ type Tor interface {
 	// RelayDestroyCircuit is called by a relay to destroy a circuit initiated
 	// by another peer. src is the address of the previous or next hop and allows
 	// the relay to identify which circuit to destroy.
-	RelayDestroyCircuit(circID uint16, src string) error
-
+	RelayDestroyCircuit(circuitID uint16, src string) error
 	// CleanupAllCircuits tears down all active circuits managed by the peer
 	CleanupAllCircuits()
 
@@ -54,6 +53,9 @@ type Tor interface {
 
 	// GetCircuitIDs returns all tracked circuit IDs (for testing)
 	GetCircuitIDs() []uint16
+
+	// SetCongestionControl enables or disables congestion control.
+	SetCongestionControl(enable bool)
 }
 
 // TorStreams defines the interface for Tor-like streams.
@@ -110,20 +112,18 @@ type TorHiddenServices interface {
 	GetIntroPointStateCount(serviceID string) int
 
 	// CreateHiddenService creates a full hidden service
-	// Create the service locally, builds a circuit, establishes intro points, builds descriptor, publishes descriptor
+	// Create the service locally, establishes intro points by building circuits into them,
+	// and builds a descriptor, which is published to the HSDir, which we already have a circuit to with IntroCircID.
 	CreateHiddenService(introPoints [][3]string,
 		timeout time.Duration,
-		lifetime time.Duration) (string, []uint16, error)
+		lifetime time.Duration,
+		IntroCircID uint16) (string, []uint16, error)
 
-	// DeleteHiddenService deletes a hidden service from a local node. This is enough since:
-	//   - Service descriptors contain an expiration time.
-	//   - Hidden Service Directories (HSDirs) automatically discard expired descriptors.
-	//   - Introduction points are bound to circuits and disappear when circuits are closed.
-	//
-	// Therefore, deleting a hidden service is achieved by:
-	//   1) Destroying all introduction point circuits.
-	//   2) Removing the service from the local state so it is no longer republished.
-	DeleteHiddenService(serviceID string) error
+	// DeleteHiddenService deletes a hidden service both locally and remotely. It works the following way:
+	//	 1) Removing the service descriptor from the HSDir.
+	//   2) Destroying all introduction point circuits.
+	//   3) Removing the service from the local state so it is no longer republished.
+	DeleteHiddenService(serviceID string, circID uint16) error
 
 	// SetPeerAsHSDir sets the flag to indicate if the peer should act as a lookup server
 	SetPeerAsHSDir(value bool)

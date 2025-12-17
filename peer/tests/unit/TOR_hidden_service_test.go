@@ -278,13 +278,23 @@ func Test_TOR_HS_Descriptor_Publish_AndLookup(t *testing.T) {
 
 // Test_TOR_HS_CreateHiddenService_Basic tests the process of a full creation of a hidden service
 // It involves creating a circuit, establishing an intro point, and publishing a descriptor.
-// High level test for Hidden Service creation.
+// High-level test for Hidden Service creation.
 func Test_TOR_HS_Create_HiddenService_Basic(t *testing.T) {
 	transp := channelFac()
 
+	// build circuit to HSDir
 	client := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
 	defer client.Stop()
+	hsGuard := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer hsGuard.Stop()
+	hsMiddle := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer hsMiddle.Stop()
+	hsDir := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer hsDir.Stop()
 
+	hsDir.Peer.SetPeerAsHSDir(true)
+
+	// circuit to the introduction point
 	guard := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
 	defer guard.Stop()
 	middle := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
@@ -292,11 +302,9 @@ func Test_TOR_HS_Create_HiddenService_Basic(t *testing.T) {
 	exit := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
 	defer exit.Stop()
 
-	// Exit acts as HSDir
-	exit.Peer.SetPeerAsHSDir(true)
-
 	nodes := []z.TestNode{
 		client,
+		hsGuard, hsMiddle, hsDir,
 		guard, middle, exit,
 	}
 	for i, n1 := range nodes {
@@ -310,14 +318,22 @@ func Test_TOR_HS_Create_HiddenService_Basic(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 	z.PopulateOnionKeys(nodes)
 
-	hops := [][3]string{
+	hops := [3]string{
+		hsGuard.GetAddr(), hsMiddle.GetAddr(), hsDir.GetAddr(),
+	}
+
+	introCircID, err := client.Peer.BuildCircuit(hops, 5*time.Second)
+	require.NoError(t, err)
+
+	introHops := [][3]string{
 		{guard.GetAddr(), middle.GetAddr(), exit.GetAddr()},
 	}
 
 	serviceID, circuits, err := client.Peer.CreateHiddenService(
-		hops,
+		introHops,
 		5*time.Second,
 		time.Minute,
+		introCircID,
 	)
 	require.NoError(t, err)
 	require.NotEmpty(t, serviceID)
@@ -333,7 +349,7 @@ func Test_TOR_HS_Create_HiddenService_Basic(t *testing.T) {
 
 	// Descriptor published and retrievable via HSDir
 	ok, introORs := client.Peer.LookupDescriptor(
-		circuits[0], // reuse circuit to HSDir
+		introCircID, // reuse circuit to HSDir
 		serviceID,
 		time.Second,
 	)
@@ -343,13 +359,22 @@ func Test_TOR_HS_Create_HiddenService_Basic(t *testing.T) {
 }
 
 // Test_TOR_HS_CreateHiddenService_MultipleIntroPoints tests the creation of a hidden service with multiple intro points
-// High level test for Hidden Service creation.
+// A client publishes a service with 2 introduction points available, and then 3 clients attempt to look it up, being
+// able to find the 2 introduction points available for that service.
 func Test_TOR_HS_Create_HiddenService_MultipleIntroPoints(t *testing.T) {
 	transp := channelFac()
 
-	// Publisher client
+	// Publisher client, builds circuit to HSDir
 	client := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
 	defer client.Stop()
+	hsGuard := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer hsGuard.Stop()
+	hsMiddle := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer hsMiddle.Stop()
+	hsDir := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer hsDir.Stop()
+
+	hsDir.Peer.SetPeerAsHSDir(true)
 
 	// Introduction point paths
 	guard1 := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
@@ -359,9 +384,6 @@ func Test_TOR_HS_Create_HiddenService_MultipleIntroPoints(t *testing.T) {
 	guard2 := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
 	middle2 := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
 	exit2 := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
-
-	// Exit1 acts as HSDir
-	exit1.Peer.SetPeerAsHSDir(true)
 
 	// Lookup clients
 	lookup1 := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
@@ -373,6 +395,7 @@ func Test_TOR_HS_Create_HiddenService_MultipleIntroPoints(t *testing.T) {
 
 	nodes := []z.TestNode{
 		client,
+		hsGuard, hsMiddle, hsDir,
 		guard1, middle1, exit1,
 		guard2, middle2, exit2,
 		lookup1, lookup2, lookup3,
@@ -389,6 +412,13 @@ func Test_TOR_HS_Create_HiddenService_MultipleIntroPoints(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 	z.PopulateOnionKeys(nodes)
 
+	hops := [3]string{
+		hsGuard.GetAddr(), hsMiddle.GetAddr(), hsDir.GetAddr(),
+	}
+
+	introCircID, err := client.Peer.BuildCircuit(hops, 5*time.Second)
+	require.NoError(t, err)
+
 	introPaths := [][3]string{
 		{guard1.GetAddr(), middle1.GetAddr(), exit1.GetAddr()},
 		{guard2.GetAddr(), middle2.GetAddr(), exit2.GetAddr()},
@@ -399,6 +429,7 @@ func Test_TOR_HS_Create_HiddenService_MultipleIntroPoints(t *testing.T) {
 		introPaths,
 		5*time.Second,
 		time.Minute,
+		introCircID,
 	)
 	require.NoError(t, err)
 	require.Len(t, circuits, 2)
@@ -418,7 +449,7 @@ func Test_TOR_HS_Create_HiddenService_MultipleIntroPoints(t *testing.T) {
 
 	for _, lc := range lookupClients {
 		circID, err := lc.Peer.BuildCircuit(
-			[3]string{guard1.GetAddr(), middle1.GetAddr(), exit1.GetAddr()},
+			[3]string{guard1.GetAddr(), middle1.GetAddr(), hsDir.GetAddr()},
 			5*time.Second,
 		)
 		require.NoError(t, err)
@@ -443,6 +474,14 @@ func Test_TOR_HS_Delete_HiddenService_Basic(t *testing.T) {
 
 	client := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
 	defer client.Stop()
+	hsGuard := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer hsGuard.Stop()
+	hsMiddle := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer hsMiddle.Stop()
+	hsDir := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer hsDir.Stop()
+
+	hsDir.Peer.SetPeerAsHSDir(true)
 
 	guard := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
 	defer guard.Stop()
@@ -451,7 +490,11 @@ func Test_TOR_HS_Delete_HiddenService_Basic(t *testing.T) {
 	exit := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
 	defer exit.Stop()
 
-	nodes := []z.TestNode{client, guard, middle, exit}
+	nodes := []z.TestNode{
+		client,
+		hsGuard, hsMiddle, hsDir,
+		guard, middle, exit}
+
 	for i, n1 := range nodes {
 		for j, n2 := range nodes {
 			if i != j {
@@ -463,7 +506,12 @@ func Test_TOR_HS_Delete_HiddenService_Basic(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 	z.PopulateOnionKeys(nodes)
 
-	exit.SetPeerAsHSDir(true)
+	hops := [3]string{
+		hsGuard.GetAddr(), hsMiddle.GetAddr(), hsDir.GetAddr(),
+	}
+
+	introCircID, err := client.Peer.BuildCircuit(hops, 5*time.Second)
+	require.NoError(t, err)
 
 	// Create HS with one intro point
 	serviceID, circuits, err := client.Peer.CreateHiddenService(
@@ -472,6 +520,7 @@ func Test_TOR_HS_Delete_HiddenService_Basic(t *testing.T) {
 		},
 		5*time.Second,
 		time.Minute,
+		introCircID,
 	)
 	require.NoError(t, err)
 	require.Len(t, circuits, 1)
@@ -479,14 +528,24 @@ func Test_TOR_HS_Delete_HiddenService_Basic(t *testing.T) {
 	require.Len(t, client.Peer.GetServiceIntroPoints(serviceID), 1)
 	require.Equal(t, 1, exit.Peer.GetIntroPointStateCount(serviceID))
 
-	err = client.Peer.DeleteHiddenService(serviceID)
+	err = client.Peer.DeleteHiddenService(serviceID, introCircID)
 	require.NoError(t, err)
 
 	// Hidden service must be gone locally
 	require.Nil(t, client.Peer.GetServiceIntroPoints(serviceID))
 
-	// Intro circuit should be destroyed
-	require.Equal(t, 0, client.Peer.GetClientCircuitsNbr())
+	// Intro circuit should be destroyed (only the circuit to HSDir should exist)
+	require.Equal(t, []uint16{introCircID}, client.Peer.GetCircuitIDs())
+
+	// Descriptor should not be available via HSDir
+	ok, introORs := client.Peer.LookupDescriptor(
+		introCircID, // reuse circuit to HSDir
+		serviceID,
+		time.Second,
+	)
+	require.False(t, ok)
+	require.Len(t, introORs, 0)
+	require.Nil(t, introORs)
 }
 
 // Test_TOR_HS_DeleteHiddenService_MultipleIntroPoints tests deletion
@@ -496,6 +555,14 @@ func Test_TOR_HS_Delete_HiddenService_MultipleIntroPoints(t *testing.T) {
 
 	client := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
 	defer client.Stop()
+	hsGuard := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer hsGuard.Stop()
+	hsMiddle := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer hsMiddle.Stop()
+	hsDir := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer hsDir.Stop()
+
+	hsDir.Peer.SetPeerAsHSDir(true)
 
 	guard1 := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
 	middle1 := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
@@ -507,6 +574,7 @@ func Test_TOR_HS_Delete_HiddenService_MultipleIntroPoints(t *testing.T) {
 
 	nodes := []z.TestNode{
 		client,
+		hsGuard, hsMiddle, hsDir,
 		guard1, middle1, exit1,
 		guard2, middle2, exit2,
 	}
@@ -521,8 +589,12 @@ func Test_TOR_HS_Delete_HiddenService_MultipleIntroPoints(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 	z.PopulateOnionKeys(nodes)
 
-	exit1.SetPeerAsHSDir(true)
-	exit2.SetPeerAsHSDir(true)
+	hops := [3]string{
+		hsGuard.GetAddr(), hsMiddle.GetAddr(), hsDir.GetAddr(),
+	}
+
+	introCircID, err := client.Peer.BuildCircuit(hops, 5*time.Second)
+	require.NoError(t, err)
 
 	serviceID, circuits, err := client.Peer.CreateHiddenService(
 		[][3]string{
@@ -531,29 +603,41 @@ func Test_TOR_HS_Delete_HiddenService_MultipleIntroPoints(t *testing.T) {
 		},
 		5*time.Second,
 		time.Minute,
+		introCircID,
 	)
 	require.NoError(t, err)
 	require.Len(t, circuits, 2)
 
 	require.Len(t, client.Peer.GetServiceIntroPoints(serviceID), 2)
-	require.Equal(t, 2, client.Peer.GetClientCircuitsNbr())
+	// one circuit to each intro point and one to HSDir
+	require.Equal(t, 3, client.Peer.GetClientCircuitsNbr())
 
 	// Delete HS
-	err = client.Peer.DeleteHiddenService(serviceID)
+	err = client.Peer.DeleteHiddenService(serviceID, introCircID)
 	require.NoError(t, err)
 
 	// All intro points removed
 	require.Nil(t, client.Peer.GetServiceIntroPoints(serviceID))
 
-	// All circuits destroyed
-	require.Equal(t, 0, client.Peer.GetClientCircuitsNbr())
+	// Intro circuits should be destroyed (only the circuit to HSDir should exist)
+	require.Equal(t, []uint16{introCircID}, client.Peer.GetCircuitIDs())
+
+	// Descriptor should not be available via HSDir
+	ok, introORs := client.Peer.LookupDescriptor(
+		introCircID, // reuse circuit to HSDir
+		serviceID,
+		time.Second,
+	)
+	require.False(t, ok)
+	require.Len(t, introORs, 0)
+	require.Nil(t, introORs)
 }
 
 // Test_TOR_HS_DeleteHiddenService_NotFound tests deleting a non-existent hidden service
 func Test_TOR_HS_Delete_HiddenService_NotFound(t *testing.T) {
-	client, _, _, _, _ := Build3HopCircuit(t)
+	client, _, _, _, circID := Build3HopCircuit(t)
 
-	err := client.Peer.DeleteHiddenService("non-existent-service")
+	err := client.Peer.DeleteHiddenService("non-existent-service", circID)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "not found")
 }
