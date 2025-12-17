@@ -892,8 +892,7 @@ func (n *node) DeleteHiddenService(serviceID string) error {
 }
 
 // PrepareRendezvousPoint implements peer.TorHiddenServices
-func (n *node) PrepareRendezvousPoint(serviceID, circID uint16,
-	timeout time.Duration) (cookie [CookieSize]byte, err error) {
+func (n *node) PrepareRendezvousPoint(circID uint16, timeout time.Duration) (cookie [CookieSize]byte, err error) {
 	rendezvousCookie := make([]byte, CookieSize)
 	_, err = rand.Read(rendezvousCookie) // generate a random cookie
 	if err != nil {
@@ -901,7 +900,6 @@ func (n *node) PrepareRendezvousPoint(serviceID, circID uint16,
 	}
 
 	n.log.Info().
-		Uint16("serviceID", serviceID).
 		Uint16("circID", circID).
 		Str("cookie", fmt.Sprintf("%x", rendezvousCookie)).
 		Msg("Rendezvous cookie generated")
@@ -920,7 +918,6 @@ func (n *node) PrepareRendezvousPoint(serviceID, circID uint16,
 	}
 
 	n.log.Info().
-		Uint16("serviceID", serviceID).
 		Uint16("circID", circID).
 		Str("cookie", fmt.Sprintf("%x", rendezvousCookie)).
 		Msg("Establish rendezvous point message sent, waiting for ACK")
@@ -928,7 +925,6 @@ func (n *node) PrepareRendezvousPoint(serviceID, circID uint16,
 	select {
 	case <-replyCh:
 		n.log.Info().
-			Uint16("serviceID", serviceID).
 			Uint16("circID", circID).
 			Str("cookie", fmt.Sprintf("%x", rendezvousCookie)).
 			Msg("ACK received for rendezvous point establishment")

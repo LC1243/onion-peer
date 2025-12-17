@@ -570,8 +570,7 @@ func Test_TOR_HS_PrepareRendezvousPoint_Succeeds(t *testing.T) {
 	exitRecvBefore := len(exit.GetIns())
 	exitSentBefore := len(exit.GetOuts())
 
-	serviceID := uint16(42)
-	cookie, err := client.Peer.PrepareRendezvousPoint(serviceID, circID, 2*time.Second)
+	cookie, err := client.Peer.PrepareRendezvousPoint(circID, 2*time.Second)
 
 	// Check packet counts after
 	clientSentAfter := len(client.GetOuts())
@@ -603,8 +602,7 @@ func Test_TOR_HS_PrepareRendezvousPoint_Succeeds(t *testing.T) {
 func Test_TOR_HS_PrepareRendezvousPoint_SmallTimeout_Fails(t *testing.T) {
 	client, _, _, exit, circID := Build3HopCircuit(t)
 
-	serviceID := uint16(42)
-	cookie, err := client.Peer.PrepareRendezvousPoint(serviceID, circID, 1*time.Nanosecond)
+	cookie, err := client.Peer.PrepareRendezvousPoint(circID, 1*time.Nanosecond)
 
 	require.Error(t, err)
 	require.Equal(t, cookie, [20]byte{}, "Cookie should be empty on error")

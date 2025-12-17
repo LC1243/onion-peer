@@ -98,8 +98,7 @@ type TorHiddenServices interface {
 	// PrepareRendezvousPoint prepares a rendezvous point on the given circID for a given serviceID.
 	// It returns the cookie that the client will send to the hidden service to connect at the RP.
 	// Cookie size is set manually to do not create cyclic import dependencies.
-	PrepareRendezvousPoint(serviceID, circID uint16,
-		timeout time.Duration) (cookie [20]byte, err error)
+	PrepareRendezvousPoint(circID uint16, timeout time.Duration) (cookie [20]byte, err error)
 
 	// GetServiceIntroPoints returns the intro points for a hidden service
 	GetServiceIntroPoints(serviceID string) []string
@@ -132,8 +131,13 @@ type TorHiddenServices interface {
 	// SetPeerAsHSDir sets the flag to indicate if the peer should act as a lookup server
 	SetPeerAsHSDir(value bool)
 
-	// GetRendezvousCount returns the number of active rendezvous points managed by the peer.
+	// GetRendezvousEntriesCount returns the number of active rendezvous points managed by the peer.
 	GetRendezvousEntriesCount() int
+
+	// ConnectToHiddenService connects to a hidden service given its serviceID.
+	// It first looks up the service descriptor to get intro points, then builds a circuit to a rendezvous point,
+	// and finally sends an introduction message to one of the intro points.
+	ConnectToHiddenService(serviceID string, HSDirCircID, RPCircID uint16) error
 }
 
 // Factory is the type of function we are using to create new instances of
