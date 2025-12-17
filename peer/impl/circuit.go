@@ -288,6 +288,8 @@ func (n *node) HandleRelayAsOP(cell Cell, src string, cc *ClientCircuit) error {
 		return n.HandleRelayHSDirReply(relayCell)
 	case RelayRPEstablished:
 		return n.HandleRelayRPEstablished(relayCell)
+	case RelayIntroduceACK:
+		return n.HandleRelayIntroduceACK(relayCell)
 	default:
 		return fmt.Errorf("unexpected relay command %d for client circuit", relayCell.Command)
 	}
@@ -483,8 +485,6 @@ func (n *node) HandleRelayAtEndpoint(relayCell RelayCell, circ *Circuit) error {
 		return n.HandleRelayHSDirDelete(relayCell, circ)
 	case RelayEstablishRP:
 		return n.HandleRelayEstablishRP(relayCell, circ)
-	case RelayIntroduceACK:
-		return n.HandleRelayIntroduceACK(relayCell)
 	default:
 		return fmt.Errorf("unknown relay command %d", relayCell.Command)
 	}
