@@ -640,3 +640,86 @@ func Test_TOR_HS_Delete_HiddenService_NotFound(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "not found")
 }
+
+// Test_TOR_HS_Descriptor_Fragmentation checks that hidden service descriptors are fragmented correctly.
+func Test_TOR_HS_Descriptor_Fragmentation(t *testing.T) {
+	transp := channelFac()
+
+	// Publisher client
+	client := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer client.Stop()
+
+	// HSDir circuit
+	guard := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	middle := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	hsDir := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer guard.Stop()
+	defer middle.Stop()
+	defer hsDir.Stop()
+
+	hsDir.Peer.SetPeerAsHSDir(true)
+
+	nodes := []z.TestNode{client, guard, middle, hsDir}
+	for i, n1 := range nodes {
+		for j, n2 := range nodes {
+			if i != j {
+				n1.AddPeer(n2.GetAddr())
+			}
+		}
+	}
+
+	time.Sleep(100 * time.Millisecond)
+	z.PopulateOnionKeys(nodes)
+
+	// Build circuit to HSDir
+	circID, err := client.Peer.BuildCircuit(
+		[3]string{guard.GetAddr(), middle.GetAddr(), hsDir.GetAddr()},
+		5*time.Second,
+	)
+	require.NoError(t, err)
+
+	clientOutsBefore := len(client.GetOuts())
+	hsdirInsBefore := len(hsDir.GetIns())
+
+	serviceID, err := client.Peer.GenerateHiddenServiceID()
+	require.NoError(t, err)
+
+	// Force fragmentation by adding many intro points
+	introORs := make([]string, 0, 20)
+	for i := 0; i < 20; i++ {
+		introORs = append(introORs, "intro-or-"+string(rune('A'+i)))
+	}
+
+	err = client.Peer.PublishDescriptorToHSDir(
+		serviceID,
+		introORs,
+		time.Minute,
+		circID,
+		2*time.Second,
+	)
+	require.NoError(t, err)
+
+	// Assert that more than one relay cell was sent (fragmentation happened)
+	clientOutsAfter := len(client.GetOuts())
+	require.Greater(
+		t,
+		clientOutsAfter,
+		clientOutsBefore+1,
+		"descriptor publish should span multiple relay cells",
+	)
+	require.Greater(t, len(hsDir.GetIns()), hsdirInsBefore+1, "should have received multiple relay cells")
+
+	clientInsBefore := len(client.GetIns())
+	hsdirOutsBefore := len(hsDir.GetOuts())
+	// Lookup descriptor
+	ok, found := client.Peer.LookupDescriptor(
+		circID,
+		serviceID,
+		time.Second,
+	)
+	require.Greater(t, len(hsDir.GetOuts()), hsdirOutsBefore+1, "should have sent multiple relay cells")
+	require.Greater(t, len(client.GetIns()), clientInsBefore+1, "should have received multiple relay cells")
+
+	require.True(t, ok)
+	require.Equal(t, introORs, found)
+}

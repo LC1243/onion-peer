@@ -63,6 +63,7 @@ func NewPeer(conf peer.Configuration) peer.Peer {
 
 	n.serviceKeys = make(map[string]*OnionKeyPair)
 	n.hiddenServices = make(map[string]*HiddenService)
+	n.hsdirFrags = make(map[fragKey]*fragBuf)
 	n.introPoints = make(map[string][]*IntroPointState)
 	n.introWait = make(map[uint16]chan struct{})
 	n.hsDirStore = make(map[string]*ServiceDescriptor)
@@ -91,6 +92,19 @@ func NewPeer(conf peer.Configuration) peer.Peer {
 	}
 
 	return n
+}
+
+// fragKey is a key for fragmented messages, unique per circuit and message ID
+type fragKey struct {
+	CircID uint16
+	MsgID  uint16
+}
+
+// fragBuf is a buffer for fragmented messages, used for hidden service directory
+// (to send and receive fragments of a descriptor)
+type fragBuf struct {
+	total uint16
+	parts map[uint16][]byte // index -> bytes
 }
 
 // node implements a peer to build a Peerster system
@@ -183,6 +197,8 @@ type node struct {
 	hsDirMu     sync.RWMutex
 	hsdirWaitMu sync.Mutex
 	hsdirWait   map[uint16]chan *ServiceDescriptor
+	hsdirFragMu sync.Mutex
+	hsdirFrags  map[fragKey]*fragBuf // MsgID -> buffer
 }
 
 // Start implements peer.Service
