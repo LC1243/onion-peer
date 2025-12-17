@@ -1426,7 +1426,7 @@ func (n *node) HandleRelayIntroduceACK(relay RelayCell) error {
 	}
 
 	// Check if the introduction was successful
-	flag := relay.Data[0]
+	flag := decryptRelayDataAtClient(cryptoStates, relay.Data, relay.Digest)[0]
 	var success bool
 	switch flag {
 	case IntroduceACKSuccess:
