@@ -104,7 +104,7 @@ type TorHiddenServices interface {
 	// It sends an INTRODUCE1 cell to the intro point on circID, containing the serviceID,
 	// servicePubKey, cookie, and rendezvousAddr (the address of the RP where the client is waiting).
 	IntroduceToHiddenService(circID uint16, serviceID string,
-		servicePubKey []byte, cookie [20]byte, rendezvousAddr string, timeout time.Duration)
+		servicePubKey []byte, cookie [20]byte, rendezvousAddr string, timeout time.Duration) error
 
 	// GetServiceIntroPoints returns the intro points for a hidden service
 	GetServiceIntroPoints(serviceID string) []string
