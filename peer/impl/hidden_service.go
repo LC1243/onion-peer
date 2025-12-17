@@ -1424,9 +1424,9 @@ func (n *node) HandleRelayIntroduceACK(relay RelayCell) error {
 	if len(cryptoStates) == 0 {
 		return fmt.Errorf("no crypto states for circuit %d", relay.CircID)
 	}
-	flag := decryptRelayDataAtClient(cryptoStates, relay.Data, relay.Digest)[0]
 
 	// Check if the introduction was successful
+	flag := relay.Data[0]
 	var success bool
 	switch flag {
 	case IntroduceACKSuccess:
