@@ -63,6 +63,8 @@ func NewPeer(conf peer.Configuration) peer.Peer {
 	n.hsdirWait = make(map[uint16]chan *ServiceDescriptor)
 	n.cookieAck = make(map[uint16]chan struct{})
 	n.rendezvousEntries = make(map[string]uint16) // every node can act as rendezvous point
+	n.introAckCh = make(map[uint16]chan struct{})
+	n.introAckSuccess = make(map[uint16]bool)
 
 	// Generate onion keypair for this node
 	// Note: In production, this should be loaded from persistent storage
