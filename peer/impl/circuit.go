@@ -469,7 +469,7 @@ func (n *node) HandleRelayAtEndpoint(relayCell RelayCell, circ *Circuit) error {
 	case RelaySendme:
 		return n.HandleRelaySendme(relayCell, circ)
 	case RelayIntroduce1:
-		return nil
+		return n.HandleRelayIntroduce1(relayCell, circ)
 	case RelayEstablishIntro:
 		return n.HandleRelayEstablishIntro(relayCell, circ)
 	case RelayRendezvous1:
