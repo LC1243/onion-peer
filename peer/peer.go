@@ -15,6 +15,8 @@ type Peer interface {
 	Tor
 	TorStreams
 	TorHiddenServices
+	TorRendezvous
+	TorClientIntroduction
 }
 
 // Tor defines the interface for Tor-like onion routing functionality.
