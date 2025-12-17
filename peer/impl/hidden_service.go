@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"io"
 	"time"
+
+	"golang.org/x/crypto/curve25519"
 )
 
 type HiddenService struct {
@@ -710,7 +712,7 @@ func (n *node) SendHSDirReply(circ *Circuit, payload []byte) error {
 	frags := SplitPayload(payload, maxChunk)
 
 	if len(frags) == 0 {
-		frags = [][]byte{[]byte{}}
+		frags = [][]byte{{}}
 	}
 
 	cryptoState := n.circuitCryptoStates[circ.InCircID][len(n.circuitCryptoStates[circ.InCircID])-1]
@@ -1626,13 +1628,26 @@ func (n *node) SendIntroduce1Message(circID uint16, serviceID string,
 		return fmt.Errorf("no crypto states for circuit %d", circID)
 	}
 
+	// Generate ephemeral DH keypair for the rendezvous handshake
+	var privateKey, publicKey [32]byte
+	if _, err := io.ReadFull(rand.Reader, privateKey[:]); err != nil {
+		return fmt.Errorf("failed to generate DH private key: %w", err)
+	}
+	curve25519.ScalarBaseMult(&publicKey, &privateKey)
+
+	// Store the DH state for completing the handshake later (when Bob connects to RP)
+	n.cryptoStatesMu.Lock()
+	n.diffieHellmanHandshakePairs[circID] = &DiffieHellmanHandshakePairs{
+		PrivateKey: privateKey,
+		PublicKey:  publicKey,
+	}
+	n.cryptoStatesMu.Unlock()
+
 	// Prepare the ServiceIntroduceMessage for the service
-	selfPubKey := n.onionKey.Public
-	stringSelfPubKey := x509.MarshalPKCS1PublicKey(selfPubKey)
 	serviceIntroMsg := &ServiceIntroduceMessage{
 		Cookie:      cookie,
 		RPAddr:      rendezvousAddr,
-		ClientDHPub: stringSelfPubKey,
+		ClientDHPub: publicKey[:],
 	}
 	servicePayload, err := EncodeServiceIntroduceMessage(serviceIntroMsg)
 	if err != nil {
@@ -1722,8 +1737,7 @@ func (n *node) HandleRelayIntroduce1(relay RelayCell, circ *Circuit) error {
 		return fmt.Errorf("no crypto states for circuit %d", relay.CircID)
 	}
 
-	plaintext := decryptRelayDataAtClient(cryptoStates, relay.Data, relay.Digest)
-	ipIntroMsg, err := DecodeIPIntroduceMessage(plaintext)
+	ipIntroMsg, err := DecodeIPIntroduceMessage(relay.Data)
 	if err != nil {
 		return fmt.Errorf("failed to decode IP introduce message: %w", err)
 	}
