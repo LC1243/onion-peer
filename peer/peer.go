@@ -16,6 +16,8 @@ type Peer interface {
 	TorStreams
 	TorHiddenServices
 	TorSecurity
+	TorRendezvous
+	TorClientIntroduction
 }
 
 // Tor defines the interface for Tor-like onion routing functionality.
@@ -111,20 +113,18 @@ type TorHiddenServices interface {
 	GetIntroPointStateCount(serviceID string) int
 
 	// CreateHiddenService creates a full hidden service
-	// Create the service locally, builds a circuit, establishes intro points, builds descriptor, publishes descriptor
+	// Create the service locally, establishes intro points by building circuits into them,
+	// and builds a descriptor, which is published to the HSDir, which we already have a circuit to with IntroCircID.
 	CreateHiddenService(introPoints [][3]string,
 		timeout time.Duration,
-		lifetime time.Duration) (string, []uint16, error)
+		lifetime time.Duration,
+		IntroCircID uint16) (string, []uint16, error)
 
-	// DeleteHiddenService deletes a hidden service from a local node. This is enough since:
-	//   - Service descriptors contain an expiration time.
-	//   - Hidden Service Directories (HSDirs) automatically discard expired descriptors.
-	//   - Introduction points are bound to circuits and disappear when circuits are closed.
-	//
-	// Therefore, deleting a hidden service is achieved by:
-	//   1) Destroying all introduction point circuits.
-	//   2) Removing the service from the local state so it is no longer republished.
-	DeleteHiddenService(serviceID string) error
+	// DeleteHiddenService deletes a hidden service both locally and remotely. It works the following way:
+	//	 1) Removing the service descriptor from the HSDir.
+	//   2) Destroying all introduction point circuits.
+	//   3) Removing the service from the local state so it is no longer republished.
+	DeleteHiddenService(serviceID string, circID uint16) error
 
 	// SetPeerAsHSDir sets the flag to indicate if the peer should act as a lookup server
 	SetPeerAsHSDir(value bool)
@@ -152,6 +152,24 @@ type TorSecurity interface {
 
 	// ResetSecurityStats resets all security statistics to zero
 	ResetSecurityStats()
+}
+
+type TorRendezvous interface {
+	// PrepareRendezvousPoint prepares a rendezvous point on the given circID for a given serviceID.
+	// It returns the cookie that the client will send to the hidden service to connect at the RP.
+	// Cookie size is set manually to do not create cyclic import dependencies.
+	PrepareRendezvousPoint(circID uint16, timeout time.Duration) (cookie [20]byte, err error)
+
+	// GetRendezvousEntriesCount returns the number of active rendezvous points managed by the peer.
+	GetRendezvousEntriesCount() int
+}
+
+type TorClientIntroduction interface {
+	// IntroduceToHiddenService introduces the client to the hidden service via an introduction point.
+	// It sends an INTRODUCE1 cell to the intro point on circID, containing the serviceID,
+	// servicePubKey, cookie, and rendezvousAddr (the address of the RP where the client is waiting).
+	IntroduceToHiddenService(circID uint16, serviceID string,
+		servicePubKey []byte, cookie [20]byte, rendezvousAddr string, timeout time.Duration) error
 }
 
 // Factory is the type of function we are using to create new instances of

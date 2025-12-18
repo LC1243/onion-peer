@@ -64,10 +64,15 @@ func NewPeer(conf peer.Configuration) peer.Peer {
 
 	n.serviceKeys = make(map[string]*OnionKeyPair)
 	n.hiddenServices = make(map[string]*HiddenService)
+	n.hsdirFrags = make(map[fragKey]*fragBuf)
 	n.introPoints = make(map[string][]*IntroPointState)
 	n.introWait = make(map[uint16]chan struct{})
 	n.hsDirStore = make(map[string]*ServiceDescriptor)
 	n.hsdirWait = make(map[uint16]chan *ServiceDescriptor)
+	n.cookieAck = make(map[uint16]chan struct{})
+	n.rendezvousEntries = make(map[string]uint16) // every node can act as rendezvous point
+	n.introAckCh = make(map[uint16]chan struct{})
+	n.introAckSuccess = make(map[uint16]bool)
 
 	// Generate onion keypair for this node
 	// Note: In production, this should be loaded from persistent storage
@@ -92,6 +97,19 @@ func NewPeer(conf peer.Configuration) peer.Peer {
 	}
 
 	return n
+}
+
+// fragKey is a key for fragmented messages, unique per circuit and message ID
+type fragKey struct {
+	CircID uint16
+	MsgID  uint16
+}
+
+// fragBuf is a buffer for fragmented messages, used for hidden service directory
+// (to send and receive fragments of a descriptor)
+type fragBuf struct {
+	total uint16
+	parts map[uint16][]byte // index -> bytes
 }
 
 // node implements a peer to build a Peerster system
@@ -179,6 +197,16 @@ type node struct {
 	introWaitMu sync.Mutex
 	introWait   map[uint16]chan struct{} // circID -> done
 
+	cookieAckMu sync.Mutex
+	cookieAck   map[uint16]chan struct{} // circID -> done
+
+	rendezvousEntryMu sync.Mutex
+	rendezvousEntries map[string]uint16 // cookie -> circID
+
+	introAckMu      sync.Mutex
+	introAckCh      map[uint16]chan struct{} // circID -> done
+	introAckSuccess map[uint16]bool          // circID -> success/fail
+
 	// IsHiddenServiceDir indicates whether the peer acts as a directory for hidden services
 	// so that multiple peers can look up for services.
 	// Default: false
@@ -195,6 +223,8 @@ type node struct {
 
 	// Security statistics for profiling and testing
 	SecurityStats SecurityStats
+	hsdirFragMu sync.Mutex
+	hsdirFrags  map[fragKey]*fragBuf // MsgID -> buffer
 }
 
 // Start implements peer.Service
