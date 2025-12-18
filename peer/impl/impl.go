@@ -51,6 +51,7 @@ func NewPeer(conf peer.Configuration) peer.Peer {
 	n.circuits = make(map[circuitKey]*Circuit)
 	n.clientCircuits = make(map[uint16]*ClientCircuit)
 	n.streamTables = make(map[uint16]*CircuitStreams)
+	n.pendingStreams = make(map[uint16]map[uint16]*Stream)
 	n.congestionControl = true
 	// Initialize rate limiting token buckets
 	n.writeBucket = NewTokenBucket(DefaultRate, DefaultCapacity)
@@ -161,6 +162,10 @@ type node struct {
 	streamsMu    sync.RWMutex
 	streamTables map[uint16]*CircuitStreams
 
+	// Stores streams waiting for RELAY_CONNECTED
+	pendingStreamsMu sync.RWMutex
+	pendingStreams   map[uint16]map[uint16]*Stream
+
 	// Congestion control toggle
 	congestionControl bool
 
@@ -211,6 +216,13 @@ type node struct {
 	hsDirMu     sync.RWMutex
 	hsdirWaitMu sync.Mutex
 	hsdirWait   map[uint16]chan *ServiceDescriptor
+
+	// Test hooks for security testing
+	TestCellInterceptor func(*Cell) // Function hook called before sending a cell to potentially modify it
+	TestInterceptorMu   sync.RWMutex
+
+	// Security statistics for profiling and testing
+	SecurityStats SecurityStats
 	hsdirFragMu sync.Mutex
 	hsdirFrags  map[fragKey]*fragBuf // MsgID -> buffer
 }
@@ -540,4 +552,13 @@ func (n *node) CleanupStreams(circID uint16) {
 	n.streamsMu.Lock()
 	delete(n.streamTables, circID)
 	n.streamsMu.Unlock()
+}
+
+// SetTestCellInterceptor sets a test hook for intercepting cells before sending.
+// This is used for security testing (e.g., tampering, corruption tests).
+// Only for testing - not part of the public Peer interface.
+func (n *node) SetTestCellInterceptor(interceptor func(*Cell)) {
+	n.TestInterceptorMu.Lock()
+	n.TestCellInterceptor = interceptor
+	n.TestInterceptorMu.Unlock()
 }
