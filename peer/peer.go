@@ -15,6 +15,8 @@ type Peer interface {
 	Tor
 	TorStreams
 	TorHiddenServices
+	TorRendezvous
+	TorClientIntroduction
 }
 
 // Tor defines the interface for Tor-like onion routing functionality.
@@ -125,6 +127,24 @@ type TorHiddenServices interface {
 
 	// SetPeerAsHSDir sets the flag to indicate if the peer should act as a lookup server
 	SetPeerAsHSDir(value bool)
+}
+
+type TorRendezvous interface {
+	// PrepareRendezvousPoint prepares a rendezvous point on the given circID for a given serviceID.
+	// It returns the cookie that the client will send to the hidden service to connect at the RP.
+	// Cookie size is set manually to do not create cyclic import dependencies.
+	PrepareRendezvousPoint(circID uint16, timeout time.Duration) (cookie [20]byte, err error)
+
+	// GetRendezvousEntriesCount returns the number of active rendezvous points managed by the peer.
+	GetRendezvousEntriesCount() int
+}
+
+type TorClientIntroduction interface {
+	// IntroduceToHiddenService introduces the client to the hidden service via an introduction point.
+	// It sends an INTRODUCE1 cell to the intro point on circID, containing the serviceID,
+	// servicePubKey, cookie, and rendezvousAddr (the address of the RP where the client is waiting).
+	IntroduceToHiddenService(circID uint16, serviceID string,
+		servicePubKey []byte, cookie [20]byte, rendezvousAddr string, timeout time.Duration) error
 }
 
 // Factory is the type of function we are using to create new instances of

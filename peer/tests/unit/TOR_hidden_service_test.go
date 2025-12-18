@@ -6,6 +6,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	z "go.dedis.ch/cs438/internal/testing"
+	"go.dedis.ch/cs438/peer/impl"
 )
 
 // Test_TOR_HS_EstablishIntroPoint_Basic tests the process of establishing an introduction point for a hidden service.
@@ -722,4 +723,104 @@ func Test_TOR_HS_Descriptor_Fragmentation(t *testing.T) {
 
 	require.True(t, ok)
 	require.Equal(t, introORs, found)
+}
+
+// Test_TOR_HS_PrepareRendezvousPoint_Succeeds tests preparing a rendezvous point for a hidden service and
+// expect it to succeed
+func Test_TOR_HS_PrepareRendezvousPoint_Succeeds(t *testing.T) {
+	client, guard, middle, exit, circID := Build3HopCircuit(t)
+
+	time.Sleep(100 * time.Millisecond) // Ensure all nodes are ready
+
+	// Check initial packet counts
+	clientSentBefore := len(client.GetOuts())
+	exitRecvBefore := len(exit.GetIns())
+	exitSentBefore := len(exit.GetOuts())
+
+	cookie, err := client.Peer.PrepareRendezvousPoint(circID, 2*time.Second)
+
+	// Check packet counts after
+	clientSentAfter := len(client.GetOuts())
+	exitRecvAfter := len(exit.GetIns())
+	exitSentAfter := len(exit.GetOuts())
+
+	// Client should have sent exactly 1 packet
+	require.Equal(t, clientSentBefore+1, clientSentAfter, "Client should have sent 1 packet")
+
+	// Exit should have received exactly 1 packet and sent exactly 1 packet
+	require.Equal(t, exitRecvBefore+1, exitRecvAfter, "Exit should have received 1 packet")
+	require.Equal(t, exitSentBefore+1, exitSentAfter, "Exit should have sent 1 packet")
+
+	// Should succeed and return a non-empty cookie
+	require.NoError(t, err)
+	require.NotEqual(t, [20]byte{}, cookie, "Cookie should not be empty")
+
+	// Exit node should have one rendezvous point recorded
+	exitEntriesCount := exit.Peer.GetRendezvousEntriesCount()
+	require.Equal(t, 1, exitEntriesCount, "Exit should have 1 rendezvous point")
+
+	// Guard and middle nodes should have no rendezvous points recorded
+	guardEntriesCount := guard.Peer.GetRendezvousEntriesCount()
+	require.Equal(t, 0, guardEntriesCount, "Guard should have 0 rendezvous points")
+	middleEntriesCount := middle.Peer.GetRendezvousEntriesCount()
+	require.Equal(t, 0, middleEntriesCount, "Middle should have 0 rendezvous points")
+}
+
+func Test_TOR_HS_PrepareRendezvousPoint_SmallTimeout_Fails(t *testing.T) {
+	client, _, _, exit, circID := Build3HopCircuit(t)
+
+	cookie, err := client.Peer.PrepareRendezvousPoint(circID, 1*time.Nanosecond)
+
+	require.Error(t, err)
+	require.Equal(t, cookie, [20]byte{}, "Cookie should be empty on error")
+	require.Contains(t, err.Error(), "timed out")
+
+	time.Sleep(200 * time.Millisecond) // Give time for any async operations
+
+	// Exit node still should have a rendezvous point recorded
+	exitEntriesCount := exit.Peer.GetRendezvousEntriesCount()
+	require.Equal(t, 1, exitEntriesCount, "Exit should have 1 rendezvous point")
+}
+
+// Test_TOR_HS_EncodeDecodeServiceIntroductionMessage_Succeeds tests encoding and decoding of a
+// Service Introduction Message
+func Test_TOR_HS_EncodeDecodeServiceIntroductionMessage_Succeeds(t *testing.T) {
+	cookie := [20]byte{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19}
+	RPAddr := "rendezvous.example.onion:1234"
+	clientDHPub := []byte{0x30, 0x82, 0x01, 0x0a, 0x02, 0x82, 0x01, 0x01, 0x00, 0xc3, 0x5d, 0x5e, 0x6f, 0x7a, 0x8b, 0x9c}
+
+	msg := impl.ServiceIntroduceMessage{
+		Cookie:      cookie,
+		RPAddr:      RPAddr,
+		ClientDHPub: clientDHPub,
+	}
+
+	encoded, err := impl.EncodeServiceIntroduceMessage(&msg)
+	require.NoError(t, err)
+	decoded, err := impl.DecodeServiceIntroduceMessage(encoded)
+	require.NoError(t, err)
+
+	require.Equal(t, msg.Cookie, decoded.Cookie, "Cookies should match")
+	require.Equal(t, msg.RPAddr, decoded.RPAddr, "RP addresses should match")
+	require.Equal(t, msg.ClientDHPub, decoded.ClientDHPub, "Client DH public keys should match")
+}
+
+// Test_TOR_HS_EncodeDecodeIPIntroductionMessage_Succeeds tests encoding and decoding of an
+// IP Introduction Message
+func Test_TO_HS_EncodeDecodeIPIntroductionMessage_Succeeds(t *testing.T) {
+	serviceID := "42"
+	encryptedBlob := []byte{0xde, 0xad, 0xbe, 0xef, 0xca, 0xfe, 0xba, 0xbe}
+
+	msg := impl.IPIntroduceMessage{
+		ServiceID:     serviceID,
+		EncryptedBlob: encryptedBlob,
+	}
+
+	encoded, err := impl.EncodeIPIntroduceMessage(&msg)
+	require.NoError(t, err)
+	decoded, err := impl.DecodeIPIntroduceMessage(encoded)
+	require.NoError(t, err)
+
+	require.Equal(t, msg.ServiceID, decoded.ServiceID, "Service IDs should match")
+	require.Equal(t, msg.EncryptedBlob, decoded.EncryptedBlob, "Encrypted blobs should match")
 }
