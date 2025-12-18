@@ -1,4 +1,4 @@
-export GLOG = no
+export GLOG = yes
 export BINLOG = warn
 export HTTPLOG = warn
 export GORACE = halt_on_error=1
