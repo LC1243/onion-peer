@@ -721,6 +721,8 @@ func (n *node) SendHSDirReply(circ *Circuit, payload []byte) error {
 
 	cryptoState := n.circuitCryptoStates[circ.InCircID][len(n.circuitCryptoStates[circ.InCircID])-1]
 
+	circ.CryptoMu.Lock()
+	defer circ.CryptoMu.Unlock()
 	return n.SendFragmentsBackward(frags, msgID, circ, cryptoState, RelayHSDirReply)
 }
 
@@ -756,7 +758,9 @@ func (n *node) PublishDescriptorToHSDir(serviceID string,
 	cryptoStates := n.circuitCryptoStates[circID]
 	cc := n.clientCircuits[circID]
 
+	cc.CryptoMu.Lock()
 	err = n.SendFragments(frags, msgID, circID, cc, cryptoStates, RelayHSDirPublish)
+	cc.CryptoMu.Unlock()
 	if err != nil {
 		return err
 	}
@@ -1182,7 +1186,9 @@ func (n *node) DeleteDescriptorFromHSDir(serviceID string, circID uint16, timeou
 
 	n.log.Info().Msgf("Sending %d fragments to HSDir", len(frags))
 
+	cc.CryptoMu.Lock()
 	err = n.SendFragments(frags, msgID, circID, cc, cryptoStates, RelayHSDirDelete)
+	cc.CryptoMu.Unlock()
 	if err != nil {
 		return err
 	}
