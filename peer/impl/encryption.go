@@ -6,7 +6,7 @@ import (
 	"crypto/cipher"
 	"crypto/rand"
 	"crypto/rsa"
-	"crypto/sha1" //nolint:gosec
+	"crypto/sha1" //nolint:gosec	// Used for Tor digest as per spec
 	"crypto/sha256"
 	"errors"
 	"fmt"
@@ -353,7 +353,7 @@ func EncryptRelayPayload(
 	defer crypto.mu.Unlock()
 
 	// Incrementally add payload to the running digest
-	// Per Tor spec: "they each incrementally add to the SHA-1 digest the contents of all relay cells they create"
+	// ToR spec requires SHA-1 digest
 	digestState.Write(payload)
 
 	// Get current digest value (first 6 bytes of SHA-1 hash)
