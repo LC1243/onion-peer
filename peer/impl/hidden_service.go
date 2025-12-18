@@ -1263,6 +1263,23 @@ func (n *node) PrepareRendezvousPoint(circID uint16, timeout time.Duration) (coo
 		Str("cookie", fmt.Sprintf("%x", rendezvousCookie)).
 		Msg("Rendezvous cookie generated")
 
+	// Generate ephemeral DH keypair for the rendezvous handshake
+	var privateKey, publicKey [32]byte
+	_, err = rand.Read(privateKey[:])
+	if err != nil {
+		return [CookieSize]byte{}, err
+	}
+	curve25519.ScalarBaseMult(&publicKey, &privateKey)
+
+	// Bind cookie → RP circuit
+	n.cryptoStatesMu.Lock()
+	n.rendezvousStates[string(cookie[:])] = &DhRendezvousState{
+		CircID:     circID, // RP circuit
+		PrivateKey: privateKey,
+		PublicKey:  publicKey,
+	}
+	n.cryptoStatesMu.Unlock()
+
 	replyCh := make(chan struct{})
 	n.cookieAckMu.Lock()
 	n.cookieAck[circID] = replyCh
@@ -1656,28 +1673,21 @@ func (n *node) SendIntroduce1Message(circID uint16, serviceID string,
 		return fmt.Errorf("no crypto states for circuit %d", circID)
 	}
 
-	// Generate ephemeral DH keypair for the rendezvous handshake
-	var privateKey, publicKey [32]byte
-	if _, err := io.ReadFull(rand.Reader, privateKey[:]); err != nil {
-		return fmt.Errorf("failed to generate DH private key: %w", err)
-	}
-	curve25519.ScalarBaseMult(&publicKey, &privateKey)
-
-	// Store the DH state for completing the handshake later (when Bob connects to RP)
 	n.cryptoStatesMu.Lock()
-	n.rendezvousStates[string(cookie[:])] = &DhRendezvousState{
-		CircID:     circID,
-		PrivateKey: privateKey,
-		PublicKey:  publicKey,
-	}
+	st := n.rendezvousStates[string(cookie[:])]
 	n.cryptoStatesMu.Unlock()
+
+	if st == nil {
+		return fmt.Errorf("no rendezvous state for cookie")
+	}
 
 	// Prepare the ServiceIntroduceMessage for the service
 	serviceIntroMsg := &ServiceIntroduceMessage{
 		Cookie:      cookie,
 		RPAddr:      rendezvousAddr,
-		ClientDHPub: publicKey[:],
+		ClientDHPub: st.PublicKey[:],
 	}
+
 	servicePayload, err := EncodeServiceIntroduceMessage(serviceIntroMsg)
 	if err != nil {
 		return fmt.Errorf("failed to encode service introduce message: %w", err)
@@ -2088,15 +2098,6 @@ func (n *node) HandleRelayRendezvous2(relay RelayCell, circ *Circuit) error {
 	data := relay.Data
 
 	cookie := relay.Data[:CookieSize]
-
-	n.rendezvousEntryMu.Lock()
-	expectedCircID, ok := n.rendezvousEntries[string(cookie)]
-	n.rendezvousEntryMu.Unlock()
-
-	if !ok || expectedCircID != relay.CircID {
-		return fmt.Errorf("unexpected rendezvous cookie")
-	}
-
 	bobPub := data[CookieSize : CookieSize+32]
 	recvHash := data[CookieSize+32 : CookieSize+64]
 
@@ -2131,12 +2132,27 @@ func (n *node) HandleRelayRendezvous2(relay RelayCell, circ *Circuit) error {
 		return err
 	}
 
-	n.circuitCryptoStates[st.CircID] =
-		append(n.circuitCryptoStates[st.CircID], cryptoState)
+	n.cryptoStatesMu.Lock()
+	n.circuitCryptoStates[st.CircID] = append(n.circuitCryptoStates[st.CircID], cryptoState)
+	n.cryptoStatesMu.Unlock()
 
 	n.log.Info().
 		Uint16("circID", relay.CircID).
 		Msg("Rendezvous handshake complete, circuit joined")
 
 	return nil
+}
+
+// GetCircuitCryptoStatesCount implements peer.TorRendezvous
+func (n *node) GetCircuitCryptoStatesCount(circID uint16) int {
+	n.cryptoStatesMu.Lock()
+	defer n.cryptoStatesMu.Unlock()
+	return len(n.circuitCryptoStates[circID])
+}
+
+// GetServicePublicKey implements peer.TorRendezvous
+func (n *node) GetServicePublicKey(serviceID string) []byte {
+	n.hiddenServiceMu.RLock()
+	defer n.hiddenServiceMu.RUnlock()
+	return x509.MarshalPKCS1PublicKey(n.hiddenServices[serviceID].KeyPair.Public)
 }

@@ -137,6 +137,12 @@ type TorRendezvous interface {
 
 	// GetRendezvousEntriesCount returns the number of active rendezvous points managed by the peer.
 	GetRendezvousEntriesCount() int
+
+	// GetServicePublicKey returns the public key of the service with the given ID.
+	GetServicePublicKey(serviceID string) []byte
+
+	// GetCircuitCryptoStatesCount returns the number of crypto states for a given circuit.
+	GetCircuitCryptoStatesCount(circID uint16) int
 }
 
 type TorClientIntroduction interface {
