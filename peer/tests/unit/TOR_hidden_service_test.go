@@ -929,8 +929,21 @@ func Test_TOR_HS_Rendezvous_FullHandshake_Succeeds(t *testing.T) {
 	)
 	require.NoError(t, err)
 
+	aliceOutsBefore := len(alice.GetOuts())
+	aliceInsBefore := len(alice.GetIns())
+
+	bobOutsBefore := len(bob.GetOuts())
+	bobInsBefore := len(bob.GetIns())
+
+	rpOutsBefore := len(rp.GetOuts())
+	rpInsBefore := len(rp.GetIns())
+
+	introOutsBefore := len(introPoint.GetOuts())
+	introInsBefore := len(introPoint.GetIns())
+
 	// Alice sends Introduce1
 	cryptoStateBefore := alice.Peer.GetCircuitCryptoStatesCount(aliceRPCirc)
+
 	err = alice.Peer.IntroduceToHiddenService(
 		aliceIntroCirc,
 		serviceID,
@@ -942,6 +955,26 @@ func Test_TOR_HS_Rendezvous_FullHandshake_Succeeds(t *testing.T) {
 	require.NoError(t, err)
 
 	time.Sleep(300 * time.Millisecond)
+
+	require.Equal(t, aliceOutsBefore+1, len(alice.GetOuts()),
+		"Alice should've sent INTRODUCE1")
+	require.Equal(t, aliceInsBefore+2, len(alice.GetIns()),
+		"Alice should've received INTRODUCE_ACK and RENDEZVOUS2")
+
+	// Bob should receive INTRODUCE2 and send RENDEZVOUS1 (besides the cells related to circuit creation, Bob->RP)
+	require.GreaterOrEqual(t, len(bob.GetIns()), bobInsBefore+1,
+		"Bob must receive at least one INTRODUCE2-related cell")
+	require.GreaterOrEqual(t, len(bob.GetOuts()), bobOutsBefore+1,
+		"Bob must send at least one RENDEZVOUS1-related cell")
+
+	require.GreaterOrEqual(t, len(rp.GetIns()), rpInsBefore+2, "RP should receive CREATE and RENDEZVOUS1")
+	require.GreaterOrEqual(t, len(rp.GetOuts()), rpOutsBefore+2, "RP should send CREATED and RENDEZVOUS2")
+
+	require.Equal(t, introInsBefore+1, len(introPoint.GetIns()),
+		"Introduction point should receive exactly one INTRODUCE1")
+	require.Equal(t, introOutsBefore+2, len(introPoint.GetOuts()),
+		"Introduction point should send INTRODUCE2 and INTRODUCE_ACK")
+
 	require.Equal(
 		t,
 		cryptoStateBefore+1,
