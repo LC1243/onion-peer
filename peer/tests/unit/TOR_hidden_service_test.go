@@ -196,12 +196,12 @@ func Test_TOR_HS_Descriptor_Expired(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	ok, _ := client.Peer.LookupDescriptor(circID, serviceID, time.Second)
+	ok, _, _ := client.Peer.LookupDescriptor(circID, serviceID, time.Second)
 	require.True(t, ok)
 
 	time.Sleep(2 * time.Second)
 
-	ok, _ = client.Peer.LookupDescriptor(circID, serviceID, time.Second)
+	ok, _, _ = client.Peer.LookupDescriptor(circID, serviceID, time.Second)
 	require.False(t, ok)
 
 }
@@ -267,7 +267,7 @@ func Test_TOR_HS_Descriptor_Publish_AndLookup(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	ok, found := lookupClient.Peer.LookupDescriptor(
+	ok, found, _ := lookupClient.Peer.LookupDescriptor(
 		lookupCircID,
 		serviceID,
 		time.Second,
@@ -348,7 +348,7 @@ func Test_TOR_HS_Create_HiddenService_Basic(t *testing.T) {
 	require.Equal(t, 1, exit.Peer.GetIntroPointStateCount(serviceID))
 
 	// Descriptor published and retrievable via HSDir
-	ok, introORs := client.Peer.LookupDescriptor(
+	ok, introORs, _ := client.Peer.LookupDescriptor(
 		introCircID, // reuse circuit to HSDir
 		serviceID,
 		time.Second,
@@ -454,7 +454,7 @@ func Test_TOR_HS_Create_HiddenService_MultipleIntroPoints(t *testing.T) {
 		)
 		require.NoError(t, err)
 
-		ok, found := lc.Peer.LookupDescriptor(
+		ok, found, _ := lc.Peer.LookupDescriptor(
 			circID,
 			serviceID,
 			time.Second,
@@ -538,7 +538,7 @@ func Test_TOR_HS_Delete_HiddenService_Basic(t *testing.T) {
 	require.Equal(t, []uint16{introCircID}, client.Peer.GetCircuitIDs())
 
 	// Descriptor should not be available via HSDir
-	ok, introORs := client.Peer.LookupDescriptor(
+	ok, introORs, _ := client.Peer.LookupDescriptor(
 		introCircID, // reuse circuit to HSDir
 		serviceID,
 		time.Second,
@@ -623,7 +623,7 @@ func Test_TOR_HS_Delete_HiddenService_MultipleIntroPoints(t *testing.T) {
 	require.Equal(t, []uint16{introCircID}, client.Peer.GetCircuitIDs())
 
 	// Descriptor should not be available via HSDir
-	ok, introORs := client.Peer.LookupDescriptor(
+	ok, introORs, _ := client.Peer.LookupDescriptor(
 		introCircID, // reuse circuit to HSDir
 		serviceID,
 		time.Second,
@@ -713,7 +713,7 @@ func Test_TOR_HS_Descriptor_Fragmentation(t *testing.T) {
 	clientInsBefore := len(client.GetIns())
 	hsdirOutsBefore := len(hsDir.GetOuts())
 	// Lookup descriptor
-	ok, found := client.Peer.LookupDescriptor(
+	ok, found, _ := client.Peer.LookupDescriptor(
 		circID,
 		serviceID,
 		time.Second,
