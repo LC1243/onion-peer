@@ -982,3 +982,118 @@ func Test_TOR_HS_Rendezvous_FullHandshake_Succeeds(t *testing.T) {
 		"rendezvous must extend Alice circuit",
 	)
 }
+
+// Test_TOR_HS_Rendezvous_WrongCookie tests the case when Alice tries to introduce to Bob using a wrong cookie.
+// Ending up in a failed establishment of communication between Alice and Bob.
+func Test_TOR_HS_Rendezvous_WrongCookie(t *testing.T) {
+	transp := channelFac()
+
+	// Alice (client)
+	alice := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer alice.Stop()
+
+	// Bob
+	bob := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer bob.Stop()
+
+	// Bob -> HSDir
+	hsGuard := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer hsGuard.Stop()
+	hsMiddle := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer hsMiddle.Stop()
+	hsDir := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer hsDir.Stop()
+	hsDir.Peer.SetPeerAsHSDir(true)
+
+	// Bob -> Introduction Point
+	guardIntro := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer guardIntro.Stop()
+	middleIntro := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer middleIntro.Stop()
+	introPoint := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer introPoint.Stop()
+
+	// Alice -> Rendezvous Point
+	guardRp := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer guardRp.Stop()
+	middleRp := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer middleRp.Stop()
+	rp := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer rp.Stop()
+
+	// Alice -> Introduction Point
+	guardAliceIntro := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer guardAliceIntro.Stop()
+	middleAliceIntro := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer middleAliceIntro.Stop()
+
+	nodes := []z.TestNode{
+		alice, bob,
+		hsGuard, hsMiddle, hsDir,
+		guardIntro, middleIntro, introPoint,
+		guardRp, middleRp, rp,
+		guardAliceIntro, middleAliceIntro,
+	}
+	for _, n := range nodes {
+		for _, m := range nodes {
+			if n != m {
+				n.AddPeer(m.GetAddr())
+			}
+		}
+	}
+
+	time.Sleep(100 * time.Millisecond)
+	z.PopulateOnionKeys(nodes)
+
+	// Bob circuit to HSDir
+	hsDirCirc, err := bob.Peer.BuildCircuit(
+		[3]string{hsGuard.GetAddr(), hsMiddle.GetAddr(), hsDir.GetAddr()},
+		5*time.Second,
+	)
+	require.NoError(t, err)
+
+	// Bob creates HS with introPoint
+	introPoints := [][3]string{{guardIntro.GetAddr(), middleIntro.GetAddr(), introPoint.GetAddr()}}
+	serviceID, _, err := bob.Peer.CreateHiddenService(introPoints, 5*time.Second, time.Minute, hsDirCirc)
+	require.NoError(t, err)
+
+	// Alice circuit to RP
+	aliceRPCirc, err := alice.Peer.BuildCircuit(
+		[3]string{guardRp.GetAddr(), middleRp.GetAddr(), rp.GetAddr()},
+		5*time.Second,
+	)
+	require.NoError(t, err)
+
+	// Alice prepares RP (creates a valid cookie, but we won't use it)
+	_, err = alice.Peer.PrepareRendezvousPoint(aliceRPCirc, time.Second)
+	require.NoError(t, err)
+
+	// Alice circuit to introPoint
+	aliceIntroCirc, err := alice.Peer.BuildCircuit(
+		[3]string{guardAliceIntro.GetAddr(), middleAliceIntro.GetAddr(), introPoint.GetAddr()},
+		5*time.Second,
+	)
+	require.NoError(t, err)
+
+	// Use wrong cookie
+	var wrongCookie [20]byte
+	copy(wrongCookie[:], []byte("this-cookie-is-wrong!!"))
+
+	cryptoBefore := alice.Peer.GetCircuitCryptoStatesCount(aliceRPCirc)
+
+	err = alice.Peer.IntroduceToHiddenService(
+		aliceIntroCirc,
+		serviceID,
+		bob.Peer.GetServicePublicKey(serviceID),
+		wrongCookie,
+		rp.GetAddr(),
+		time.Second,
+	)
+	// Rendezvous must fail: no RENDEZVOUS2.
+	require.Error(t, err)
+
+	time.Sleep(400 * time.Millisecond)
+
+	require.Equal(t, cryptoBefore, alice.Peer.GetCircuitCryptoStatesCount(aliceRPCirc),
+		"Alice RP circuit must NOT extend if cookie is unknown at RP")
+}
