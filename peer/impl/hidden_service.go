@@ -1934,10 +1934,85 @@ func (n *node) HandleRelayIntroduce2(relay RelayCell, circ *Circuit) error {
 	return n.SendRelayRendezvous1(relay.CircID, serviceIntro.RPAddr)
 }
 
-// SendRelayRendezvous1 builds a circuits to Alice RP,sending the Rendezvous cookie, and the second half of the DH
-// handshake and an hash of the session key
+// SendRelayRendezvous1 builds a circuit to Alice RP, sending the Rendezvous cookie, and the second half of the DH
+// handshake and a hash of the session key
 func (n *node) SendRelayRendezvous1(circID uint16, rendezvousAddr string) error {
-	return nil
+	// Retrieve DH state from INTRODUCE1
+	n.cryptoStatesMu.Lock()
+	dhState, ok := n.diffieHellmanHandshakePairs[circID]
+	n.cryptoStatesMu.Unlock()
+
+	if !ok {
+		return fmt.Errorf("no DH state for rendezvous on circ %d", circID)
+	}
+
+	// Build circuit to the rendezvous point
+	middleHops, err := n.BuildRandomPath(2, rendezvousAddr)
+	if err != nil {
+		return fmt.Errorf("failed to build random path: %w", err)
+	}
+
+	rpCircID, err := n.BuildCircuit([3]string{
+		middleHops[0],
+		middleHops[1],
+		rendezvousAddr,
+	}, 5*time.Second)
+
+	if err != nil {
+		return fmt.Errorf("failed to build circuit to RP: %w", err)
+	}
+
+	cryptoStates := n.circuitCryptoStates[rpCircID]
+	if len(cryptoStates) == 0 {
+		return fmt.Errorf("no crypto states for RP circuit")
+	}
+
+	// Generate Bob’s DH keypair
+	var bobPriv, bobPub [32]byte
+	_, err = rand.Read(bobPriv[:])
+	if err != nil {
+		return err
+	}
+	curve25519.ScalarBaseMult(&bobPub, &bobPriv)
+
+	// Compute secret between Alice and Bob
+	sharedSecret, err := curve25519.X25519(bobPriv[:], dhState.PublicKey[:])
+	if err != nil {
+		return err
+	}
+
+	// Compute handshake hash
+	h := sha256.New()
+	h.Write(sharedSecret)
+	h.Write([]byte("handshake"))
+	handshakeHash := h.Sum(nil)
+
+	// Build payload
+	payload := bytes.NewBuffer(nil)
+	payload.Write(dhState.PublicKey[:CookieSize])
+	payload.Write(bobPub[:])
+	payload.Write(handshakeHash)
+
+	encrypted, digest, err := EncryptRelayCellThroughCircuit(cryptoStates, payload.Bytes())
+	if err != nil {
+		return err
+	}
+
+	relay := RelayCell{
+		CircID:   rpCircID,
+		StreamID: 0,
+		Command:  RelayRendezvous1,
+		Digest:   digest,
+		Length:   uint16(len(encrypted)),
+		Data:     encrypted,
+	}
+
+	cell, err := n.EncodeRelayCell(relay)
+	if err != nil {
+		return err
+	}
+
+	return n.SendCell(n.clientCircuits[rpCircID].Hops[0], cell)
 }
 
 func (n *node) HandleRelayRendezvous1(relay RelayCell, circ *Circuit) error {
