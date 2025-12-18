@@ -90,6 +90,10 @@ type Stream struct {
 	DeliverWindow int        // Number of cells that can be received
 	WindowCond    *sync.Cond // To block when PackageWindow is 0
 
+	// Fairness / Prioritization
+	CellCount float64 // EWMA of cells sent
+	IsBulk    bool    // True if CellCount > Threshold
+
 	// TODO: In real implementation, there would be a server node sending data back, not exit
 }
 
@@ -284,7 +288,7 @@ func (n *node) HandleCreated(cell Cell, src string) error {
 		if err != nil {
 			return err
 		}
-		return n.SendCell(targetCirc.PrevHop, cellToSend)
+		return n.SendCell(targetCirc.PrevHop, cellToSend, targetCirc)
 	}
 
 	return nil
@@ -842,7 +846,7 @@ func (n *node) sendRelayControlCell(circ *Circuit, streamID uint16, command uint
 		Uint16("circID", circ.InCircID).
 		Uint16("streamID", streamID).
 		Msgf("%s sent successfully", msgType)
-	return n.SendCell(circ.PrevHop, cell)
+	return n.SendCell(circ.PrevHop, cell, circ)
 }
 
 // SendRelayConnected sends RELAY_CONNECTED after receiving RELAY_BEGIN
@@ -993,7 +997,7 @@ func (n *node) HandleRelayExtended(_ RelayCell, _ *Circuit) error {
 
 // SendCell sends a cell to a destination
 // Optional: pass the circuit associated with this cell for fairness accounting
-// circ can be *Circuit or *ClientCircuit
+// circ can be *Circuit, *ClientCircuit, or *Stream
 func (n *node) SendCell(dest string, cell Cell, circ ...interface{}) error {
 	// Calling the hook
 	n.TestInterceptorMu.RLock()
@@ -1032,6 +1036,11 @@ func (n *node) SendCell(dest string, cell Cell, circ ...interface{}) error {
 				c.updatePriority()
 				isBulk = c.IsBulk
 				c.StatsMu.Unlock()
+			case *Stream:
+				c.mu.Lock()
+				c.updatePriority()
+				isBulk = c.IsBulk
+				c.mu.Unlock()
 			}
 		}
 
@@ -2214,6 +2223,7 @@ func (n *node) encryptAndSendRelayData(
 	data []byte,
 	cryptoStates []*CircuitCryptoState,
 	guardAddr string,
+	stream *Stream,
 ) error {
 	// TODO: We currently assume data always fits in a single relay cell, so
 	// encrypt the whole payload at once
@@ -2258,7 +2268,13 @@ func (n *node) encryptAndSendRelayData(
 	cc, _ := n.clientCircuits[circID]
 	n.clientCircuitsMu.RUnlock()
 
-	err = n.SendCell(guardAddr, cell, cc)
+	// Pass stream if available, otherwise pass circuit
+	if stream != nil {
+		err = n.SendCell(guardAddr, cell, stream)
+	} else {
+		err = n.SendCell(guardAddr, cell, cc)
+	}
+
 	if err != nil {
 		n.log.Error().
 			Err(err).
@@ -2321,7 +2337,7 @@ func (n *node) SendStreamData(circID, streamID uint16, data []byte) error {
 
 	// Encrypt and send data
 	cc.CryptoMu.Lock()
-	err = n.encryptAndSendRelayData(circID, streamID, data, cryptoStates, cc.Hops[0])
+	err = n.encryptAndSendRelayData(circID, streamID, data, cryptoStates, cc.Hops[0], stream)
 	cc.CryptoMu.Unlock()
 	if err != nil {
 		return err
@@ -2501,7 +2517,7 @@ func (n *node) sendRelaySendmeStream(circ *Circuit, streamID uint16) error {
 	}
 
 	cell, _ := n.EncodeRelayCell(relayCell)
-	return n.SendCell(circ.PrevHop, cell)
+	return n.SendCell(circ.PrevHop, cell, circ)
 }
 
 // sendRelaySendmeToHop sends a circuit-level RELAY_SENDME to a specific hop (for hop-by-hop flow control)

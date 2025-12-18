@@ -69,9 +69,6 @@ func (s *CircuitScheduler) Schedule(msg transport.Message, dest string, isBulk b
 		select {
 		case s.bulkCh <- qPkt:
 		default:
-			// If bulk queue is full, drop or block?
-			// For now, we block to apply backpressure, or we could drop.
-			// Given this is a simulation, blocking might be safer to avoid packet loss noise in tests.
 			s.node.log.Warn().Str("dest", dest).Msg("Bulk queue full, blocking")
 			s.bulkCh <- qPkt
 		}
@@ -89,29 +86,56 @@ func (s *CircuitScheduler) Schedule(msg transport.Message, dest string, isBulk b
 // run is the main scheduling loop
 func (s *CircuitScheduler) run() {
 	defer s.wg.Done()
+	consecutiveInteractive := 0
+	const MaxConsecutiveInteractive = 5 // Send 1 bulk for every 5 interactive if saturated
+
 	for {
-		// Priority check: Always try to drain interactive queue first
-		select {
-		case <-s.stopCh:
-			return
-		case qPkt := <-s.interactiveCh:
-			s.node.log.Debug().Str("dest", qPkt.dest).Msg("Sending interactive packet")
-			_ = s.node.Unicast(qPkt.dest, qPkt.msg)
-			continue // Loop back to check interactive again
-		default:
-			// No interactive packet ready immediately
+		// Check if we should force a bulk packet check
+		forceBulk := consecutiveInteractive >= MaxConsecutiveInteractive
+
+		if !forceBulk {
+			// Priority check: Always try to drain interactive queue first
+			select {
+			case <-s.stopCh:
+				return
+			case qPkt := <-s.interactiveCh:
+				s.node.log.Debug().Str("dest", qPkt.dest).Msg("Sending interactive packet")
+				_ = s.node.Unicast(qPkt.dest, qPkt.msg)
+				consecutiveInteractive++
+				continue // Loop back to check interactive again
+			default:
+				// No interactive packet ready immediately
+			}
 		}
 
-		// If no interactive packet, wait for either
+		// If we forced bulk, we want to prioritize bulk.
+		if forceBulk {
+			select {
+			case <-s.stopCh:
+				return
+			case qPkt := <-s.bulkCh:
+				s.node.log.Debug().Str("dest", qPkt.dest).Msg("Sending bulk packet (forced)")
+				_ = s.node.Unicast(qPkt.dest, qPkt.msg)
+				consecutiveInteractive = 0
+				continue
+			default:
+				// No bulk available, reset counter and continue to normal loop
+				consecutiveInteractive = 0
+			}
+		}
+
+		// If no interactive packet (or we forced bulk check and found none), wait for either
 		select {
 		case <-s.stopCh:
 			return
 		case qPkt := <-s.interactiveCh:
 			s.node.log.Debug().Str("dest", qPkt.dest).Msg("Sending interactive packet")
 			_ = s.node.Unicast(qPkt.dest, qPkt.msg)
+			consecutiveInteractive++
 		case qPkt := <-s.bulkCh:
 			s.node.log.Debug().Str("dest", qPkt.dest).Msg("Sending bulk packet")
 			_ = s.node.Unicast(qPkt.dest, qPkt.msg)
+			consecutiveInteractive = 0
 		}
 	}
 }
@@ -157,6 +181,19 @@ func (s *CircuitScheduler) decayCircuits() {
 	}
 	s.node.clientCircuitsMu.Unlock()
 	s.node.log.Trace().Msg("Decaying client circuits: lock released")
+
+	// Decay streams
+	s.node.log.Trace().Msg("Decaying streams: acquiring lock")
+	s.node.streamsMu.Lock()
+	for _, cs := range s.node.streamTables {
+		for _, stream := range cs.Streams {
+			stream.mu.Lock()
+			stream.decayPriority()
+			stream.mu.Unlock()
+		}
+	}
+	s.node.streamsMu.Unlock()
+	s.node.log.Trace().Msg("Decaying streams: lock released")
 }
 
 // updatePriority updates the EWMA count and determines if circuit is Bulk
@@ -189,5 +226,20 @@ func (c *ClientCircuit) decayPriority() {
 	c.CellCount *= EwmaDecayFactor
 	if c.CellCount < BulkThreshold {
 		c.IsBulk = false
+	}
+}
+
+// Same for Stream
+func (s *Stream) updatePriority() {
+	s.CellCount++
+	if s.CellCount > BulkThreshold {
+		s.IsBulk = true
+	}
+}
+
+func (s *Stream) decayPriority() {
+	s.CellCount *= EwmaDecayFactor
+	if s.CellCount < BulkThreshold {
+		s.IsBulk = false
 	}
 }
