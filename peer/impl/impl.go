@@ -185,6 +185,7 @@ type node struct {
 
 	serviceKeys    map[string]*OnionKeyPair
 	hiddenServices map[string]*HiddenService
+	hiddenServiceMu sync.RWMutex
 
 	introPoints   map[string][]*IntroPointState // serviceID -> state
 	introPointsMu sync.RWMutex

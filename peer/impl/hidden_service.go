@@ -91,13 +91,19 @@ func (n *node) GenerateHiddenServiceID() (string, error) {
 		KeyPair: key,
 	}
 
+	n.hiddenServiceMu.RLock()
 	n.hiddenServices[serviceID] = hs
+	n.hiddenServiceMu.RUnlock()
+
 	return serviceID, nil
 }
 
 // EstablishIntroPoint implements Tor.HiddenServices
 func (n *node) EstablishIntroPoint(serviceID string, circID uint16, timeout time.Duration) error {
+	n.hiddenServiceMu.RLock()
 	hs, ok := n.hiddenServices[serviceID]
+	n.hiddenServiceMu.RUnlock()
+
 	if !ok {
 		return fmt.Errorf("unknown serviceID: %s", serviceID)
 	}
@@ -138,7 +144,10 @@ func (n *node) EstablishIntroPoint(serviceID string, circID uint16, timeout time
 
 // SendAndWaitForIntroReply tries to create an Introduction Point and waits for the corresponding confirmation
 func (n *node) SendAndWaitForIntroReply(circID uint16, serviceID string, cell Cell, timeout time.Duration) error {
+	n.hiddenServiceMu.RLock()
 	hs := n.hiddenServices[serviceID]
+	n.hiddenServiceMu.RUnlock()
+
 	cc := n.clientCircuits[circID]
 
 	ch := make(chan struct{})
@@ -915,7 +924,10 @@ func (n *node) BuildServiceDescriptor(serviceID string,
 	introORs []string,
 	lifetime time.Duration) (*ServiceDescriptor, error) {
 
+	n.hiddenServiceMu.RLock()
 	hs, ok := n.hiddenServices[serviceID]
+	n.hiddenServiceMu.RUnlock()
+
 	if !ok {
 		return nil, fmt.Errorf("hidden service %s not found", serviceID)
 	}
@@ -1006,7 +1018,10 @@ func (n *node) VerifyServiceDescriptor(desc *ServiceDescriptor) error {
 
 // GetServiceIntroPoints implements peer.TorHiddenServices
 func (n *node) GetServiceIntroPoints(serviceID string) []string {
+	n.hiddenServiceMu.RLock()
 	hs, ok := n.hiddenServices[serviceID]
+	n.hiddenServiceMu.RUnlock()
+
 	if !ok {
 		return nil
 	}
@@ -1019,6 +1034,8 @@ func (n *node) GetServiceIntroPoints(serviceID string) []string {
 
 // GetIntroPointCount implements peer.TorHiddenServices
 func (n *node) GetIntroPointCount(serviceID string) int {
+	n.hiddenServiceMu.RLock()
+	defer n.hiddenServiceMu.RUnlock()
 	return len(n.hiddenServices[serviceID].IntroPoints)
 }
 
@@ -1196,7 +1213,10 @@ func (n *node) DeleteDescriptorFromHSDir(serviceID string, circID uint16, timeou
 
 // DeleteHiddenService implements peer.TorHiddenServices
 func (n *node) DeleteHiddenService(serviceID string, circID uint16) error {
+	n.hiddenServiceMu.RLock()
 	hs, ok := n.hiddenServices[serviceID]
+	n.hiddenServiceMu.RUnlock()
+
 	if !ok {
 		return fmt.Errorf("hidden service %s not found", serviceID)
 	}
@@ -1213,7 +1233,9 @@ func (n *node) DeleteHiddenService(serviceID string, circID uint16) error {
 	}
 
 	// Remove the local hidden service
+	n.hiddenServiceMu.Lock()
 	delete(n.hiddenServices, serviceID)
+	n.hiddenServiceMu.Unlock()
 
 	n.log.Info().
 		Str("serviceID", serviceID).
@@ -1849,4 +1871,75 @@ func (n *node) IntroduceToHiddenService(circID uint16, serviceID string,
 		n.introAckMu.Unlock()
 		return fmt.Errorf("introduce ACK timed out")
 	}
+}
+
+// HandleRelayIntroduce2 handles an introduce2 relay cell received at the node who owns the hidden service
+func (n *node) HandleRelayIntroduce2(relay RelayCell, circ *Circuit) error {
+	cryptoStates := n.circuitCryptoStates[relay.CircID]
+	if len(cryptoStates) == 0 {
+		return fmt.Errorf("no crypto states for circuit %d", relay.CircID)
+	}
+
+	// Decode outer message
+	ipIntroMsg, err := DecodeIPIntroduceMessage(relay.Data)
+	if err != nil {
+		return fmt.Errorf("failed to decode IP introduce message: %w", err)
+	}
+
+	n.hiddenServiceMu.RLock()
+	hs, ok := n.hiddenServices[ipIntroMsg.ServiceID]
+	n.hiddenServiceMu.RUnlock()
+	if !ok {
+		return fmt.Errorf("unknown hidden service %s", ipIntroMsg.ServiceID)
+	}
+
+	// Decrypt inner blob using the service private key
+	decrypted, err := rsa.DecryptOAEP(
+		sha256.New(),
+		rand.Reader,
+		hs.KeyPair.Private,
+		ipIntroMsg.EncryptedBlob,
+		nil,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to decrypt introduce2 blob: %w", err)
+	}
+
+	// Decode ServiceIntroduceMessage
+	serviceIntro, err := DecodeServiceIntroduceMessage(decrypted)
+	if err != nil {
+		return fmt.Errorf("failed to decode service introduce message: %w", err)
+	}
+
+	if len(serviceIntro.ClientDHPub) != 32 {
+		return fmt.Errorf("invalid client DH public key length")
+	}
+
+	var alicePub [32]byte
+	copy(alicePub[:], serviceIntro.ClientDHPub)
+
+	// Store Alice DH state for rendezvous
+	n.cryptoStatesMu.Lock()
+	n.diffieHellmanHandshakePairs[relay.CircID] = &DiffieHellmanHandshakePairs{
+		PublicKey: alicePub,
+	}
+	n.cryptoStatesMu.Unlock()
+
+	n.log.Info().
+		Str("serviceID", ipIntroMsg.ServiceID).
+		Str("rpAddr", serviceIntro.RPAddr).
+		Msg("Introduce2 received, starting rendezvous")
+
+	// Build circuit to RP and send Rendezvous1
+	return n.SendRelayRendezvous1(relay.CircID, serviceIntro.RPAddr)
+}
+
+// SendRelayRendezvous1 builds a circuits to Alice RP,sending the Rendezvous cookie, and the second half of the DH
+// handshake and an hash of the session key
+func (n *node) SendRelayRendezvous1(circID uint16, rendezvousAddr string) error {
+	return nil
+}
+
+func (n *node) HandleRelayRendezvous1(relay RelayCell, circ *Circuit) error {
+	return nil
 }

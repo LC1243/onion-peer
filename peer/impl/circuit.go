@@ -473,10 +473,12 @@ func (n *node) HandleRelayAtEndpoint(relayCell RelayCell, circ *Circuit) error {
 		return n.HandleRelaySendme(relayCell, circ)
 	case RelayIntroduce1:
 		return n.HandleRelayIntroduce1(relayCell, circ)
+	case RelayIntroduce2:
+		return n.HandleRelayIntroduce2(relayCell, circ)
 	case RelayEstablishIntro:
 		return n.HandleRelayEstablishIntro(relayCell, circ)
 	case RelayRendezvous1:
-		return nil
+		return n.HandleRelayRendezvous1(relayCell, circ)
 	case RelayHSDirPublish:
 		return n.HandleRelayHSDirPublish(relayCell, circ)
 	case RelayHSDirLookup:
