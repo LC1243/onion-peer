@@ -53,6 +53,7 @@ func NewPeer(conf peer.Configuration) peer.Peer {
 	n.circuits = make(map[circuitKey]*Circuit)
 	n.clientCircuits = make(map[uint16]*ClientCircuit)
 	n.streamTables = make(map[uint16]*CircuitStreams)
+	n.pendingStreams = make(map[uint16]map[uint16]*Stream)
 	n.congestionControl = true
 	// Initialize rate limiting token buckets
 	n.writeBucket = NewTokenBucket(DefaultRate, DefaultCapacity)
@@ -68,10 +69,15 @@ func NewPeer(conf peer.Configuration) peer.Peer {
 
 	n.serviceKeys = make(map[string]*OnionKeyPair)
 	n.hiddenServices = make(map[string]*HiddenService)
+	n.hsdirFrags = make(map[fragKey]*fragBuf)
 	n.introPoints = make(map[string][]*IntroPointState)
 	n.introWait = make(map[uint16]chan struct{})
 	n.hsDirStore = make(map[string]*ServiceDescriptor)
 	n.hsdirWait = make(map[uint16]chan *ServiceDescriptor)
+	n.cookieAck = make(map[uint16]chan struct{})
+	n.rendezvousEntries = make(map[string]uint16) // every node can act as rendezvous point
+	n.introAckCh = make(map[uint16]chan struct{})
+	n.introAckSuccess = make(map[uint16]bool)
 
 	// Generate onion keypair for this node
 	// Note: In production, this should be loaded from persistent storage
@@ -96,6 +102,19 @@ func NewPeer(conf peer.Configuration) peer.Peer {
 	}
 
 	return n
+}
+
+// fragKey is a key for fragmented messages, unique per circuit and message ID
+type fragKey struct {
+	CircID uint16
+	MsgID  uint16
+}
+
+// fragBuf is a buffer for fragmented messages, used for hidden service directory
+// (to send and receive fragments of a descriptor)
+type fragBuf struct {
+	total uint16
+	parts map[uint16][]byte // index -> bytes
 }
 
 // node implements a peer to build a Peerster system
@@ -148,6 +167,10 @@ type node struct {
 	streamsMu    sync.RWMutex
 	streamTables map[uint16]*CircuitStreams
 
+	// Stores streams waiting for RELAY_CONNECTED
+	pendingStreamsMu sync.RWMutex
+	pendingStreams   map[uint16]map[uint16]*Stream
+
 	// Congestion control toggle
 	congestionControl bool
 
@@ -182,6 +205,16 @@ type node struct {
 	introWaitMu sync.Mutex
 	introWait   map[uint16]chan struct{} // circID -> done
 
+	cookieAckMu sync.Mutex
+	cookieAck   map[uint16]chan struct{} // circID -> done
+
+	rendezvousEntryMu sync.Mutex
+	rendezvousEntries map[string]uint16 // cookie -> circID
+
+	introAckMu      sync.Mutex
+	introAckCh      map[uint16]chan struct{} // circID -> done
+	introAckSuccess map[uint16]bool          // circID -> success/fail
+
 	// IsHiddenServiceDir indicates whether the peer acts as a directory for hidden services
 	// so that multiple peers can look up for services.
 	// Default: false
@@ -191,6 +224,15 @@ type node struct {
 	hsDirMu     sync.RWMutex
 	hsdirWaitMu sync.Mutex
 	hsdirWait   map[uint16]chan *ServiceDescriptor
+
+	// Test hooks for security testing
+	TestCellInterceptor func(*Cell) // Function hook called before sending a cell to potentially modify it
+	TestInterceptorMu   sync.RWMutex
+
+	// Security statistics for profiling and testing
+	SecurityStats SecurityStats
+	hsdirFragMu sync.Mutex
+	hsdirFrags  map[fragKey]*fragBuf // MsgID -> buffer
 }
 
 // Start implements peer.Service
@@ -526,4 +568,13 @@ func (n *node) CleanupStreams(circID uint16) {
 	n.streamsMu.Lock()
 	delete(n.streamTables, circID)
 	n.streamsMu.Unlock()
+}
+
+// SetTestCellInterceptor sets a test hook for intercepting cells before sending.
+// This is used for security testing (e.g., tampering, corruption tests).
+// Only for testing - not part of the public Peer interface.
+func (n *node) SetTestCellInterceptor(interceptor func(*Cell)) {
+	n.TestInterceptorMu.Lock()
+	n.TestCellInterceptor = interceptor
+	n.TestInterceptorMu.Unlock()
 }

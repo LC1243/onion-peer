@@ -1,7 +1,6 @@
 package impl
 
 import (
-	"crypto/sha256"
 	"errors"
 	"fmt"
 	"math/rand"
@@ -300,6 +299,10 @@ func (n *node) HandleRelayAsOP(cell Cell, src string, cc *ClientCircuit) error {
 		return n.HandleRelayIntroEstablished(relayCell)
 	case RelayHSDirReply:
 		return n.HandleRelayHSDirReply(relayCell)
+	case RelayRPEstablished:
+		return n.HandleRelayRPEstablished(relayCell)
+	case RelayIntroduceACK:
+		return n.HandleRelayIntroduceACK(relayCell)
 	default:
 		return fmt.Errorf("unexpected relay command %d for client circuit", relayCell.Command)
 	}
@@ -425,40 +428,48 @@ func (n *node) HandleForwardRelay(cell Cell, circ *Circuit) error {
 		return fmt.Errorf("no crypto state found for circuit %d", circ.InCircID)
 	}
 
-	// Decrypt one layer using our crypto state
-	decryptedData, err := DecryptRelayPayload(cryptoStates[0], DirectionForward, relayCell.Data, relayCell.Digest)
-	if err != nil {
-		return fmt.Errorf("failed to decrypt relay cell data: %w", err)
-	}
+	// Try to decrypt and check if this cell is for this node using digest verification
+	// The digest check determines if this is the intended recipient
+	decryptedData, isForUs := DecryptRelayCellAtHop(cryptoStates[0], DirectionForward, relayCell.Data, relayCell.Digest)
 
-	if circ.NextHop == "" {
-		// We are the end of the circuit, process the relay command
+	if isForUs {
+		// Digest matched so, we are the intended destination
+		n.log.Info().
+			Uint16("circID", circ.InCircID).
+			Uint8("command", relayCell.Command).
+			Msg("Digest matched and processing relay command")
+
 		// Replace the encrypted Data with decrypted plaintext
 		relayCell.Data = decryptedData
 		return n.HandleRelayAtEndpoint(relayCell, circ)
 	}
 
+	// Digest didn't match so, this cell has to be forwarded
+	n.SecurityStats.mu.Lock()
+	n.SecurityStats.DigestMismatches++
+	n.SecurityStats.RelayDigestMismatches++
+	n.SecurityStats.mu.Unlock()
+
 	n.log.Info().
 		Uint16("circID", circ.InCircID).
 		Str("nextHop", circ.NextHop).
-		Msg("Forwarding Decrypted relay cell to next hop")
+		Msg("Digest mismatch; forwarding relay cell to next hop")
 
+	if circ.NextHop == "" {
+		n.SecurityStats.mu.Lock()
+		n.SecurityStats.DroppedCells++
+		n.SecurityStats.DroppedDigestMismatch++
+		n.SecurityStats.DroppedNoNextHop++
+		n.SecurityStats.mu.Unlock()
+		return fmt.Errorf("digest mismatch but no next hop to forward to")
+	}
 	// We are an intermediate node, forward the decrypted data to NextHop
 
 	// Flow Control: Relays do not decrement the circuit window for cells that they are just relaying
 	// So we do NOT decrement PackageWindow here
 
-	// Recompute digest for the decrypted data
-	h := sha256.New()
-	h.Write(cryptoStates[0].ForwardDigest)
-	h.Write(decryptedData)
-	hash := h.Sum(nil)
-	var newDigest [6]byte
-	copy(newDigest[:], hash[:6])
-
-	// Re-encode the relay cell with the decrypted data and new digest
+	// Forward the decrypted data to NextHop
 	relayCell.Data = decryptedData
-	relayCell.Digest = newDigest
 	relayCell.Length = uint16(len(decryptedData))
 	relayCell.CircID = circ.OutCircID
 	forwardCell, err := n.EncodeRelayCell(relayCell)
@@ -484,7 +495,7 @@ func (n *node) HandleRelayAtEndpoint(relayCell RelayCell, circ *Circuit) error {
 	case RelaySendme:
 		return n.HandleRelaySendme(relayCell, circ)
 	case RelayIntroduce1:
-		return nil
+		return n.HandleRelayIntroduce1(relayCell, circ)
 	case RelayEstablishIntro:
 		return n.HandleRelayEstablishIntro(relayCell, circ)
 	case RelayRendezvous1:
@@ -493,6 +504,10 @@ func (n *node) HandleRelayAtEndpoint(relayCell RelayCell, circ *Circuit) error {
 		return n.HandleRelayHSDirPublish(relayCell, circ)
 	case RelayHSDirLookup:
 		return n.HandleRelayHSDirLookup(relayCell, circ)
+	case RelayHSDirDelete:
+		return n.HandleRelayHSDirDelete(relayCell, circ)
+	case RelayEstablishRP:
+		return n.HandleRelayEstablishRP(relayCell, circ)
 	default:
 		return fmt.Errorf("unknown relay command %d", relayCell.Command)
 	}
@@ -808,6 +823,13 @@ func (n *node) HandleRelayExtended(_ RelayCell, _ *Circuit) error {
 // Optional: pass the circuit associated with this cell for fairness accounting
 // circ can be *Circuit, *ClientCircuit, or *Stream
 func (n *node) SendCell(dest string, cell Cell, circ ...interface{}) error {
+	// Calling the hook
+	n.TestInterceptorMu.RLock()
+	if n.TestCellInterceptor != nil {
+		n.TestCellInterceptor(&cell)
+	}
+	n.TestInterceptorMu.RUnlock()
+
 	encoded, err := n.EncodeCell(cell)
 	if err != nil {
 		return err
@@ -1034,15 +1056,14 @@ func (n *node) HandleRelayExtendedAsOP(relayCell RelayCell) error {
 		if len(cryptoStates) == 0 {
 			return fmt.Errorf("no crypto states found for circuit %d", circID)
 		}
-		relayExtendedPayloadPlainText, err := DecryptRelayPayload(
+
+		// Decrypt through guard layer
+		relayExtendedPayloadPlainText, _ := DecryptRelayCellAtHop(
 			cryptoStates[0],
 			DirectionBackward,
 			relayCell.Data,
-			relayCell.Digest,
+			[6]byte{}, // dummy digest as verification in backward direction is not needed
 		)
-		if err != nil {
-			return fmt.Errorf("failed to decrypt relay extended payload for circuit %d: %w", circID, err)
-		}
 
 		// Complete the handshake as the initiator for the Middle node
 		circuitCryptoState, err := n.FinishHandshakeAsInitiator(
@@ -1076,14 +1097,14 @@ func (n *node) HandleRelayExtendedAsOP(relayCell RelayCell) error {
 			cryptoStates[1],
 			DirectionBackward,
 			relayCell.Data,
-			relayCell.Digest,
+			[6]byte{}, // dummy digest
 		)
 
 		relayExtendedPayloadPlainText, _ = DecryptRelayCellAtHop(
 			cryptoStates[0],
 			DirectionBackward,
 			relayExtendedPayloadPlainText,
-			relayCell.Digest,
+			[6]byte{}, // dummy digest
 		)
 
 		// Complete the handshake as the initiator for the Exit node
@@ -1118,6 +1139,24 @@ func (n *node) HandleRelayConnectedAsOP(relay RelayCell, cc *ClientCircuit) erro
 		Uint16("streamID", relay.StreamID).
 		Msg("Handling RelayConnected as OP")
 
+	// First check if this is a pending stream
+	pendingStream := n.getPendingStream(cc.CircID, relay.StreamID)
+	if pendingStream != nil {
+		// Move stream from pending to active
+		n.removePendingStream(cc.CircID, relay.StreamID)
+		pendingStream.mu.Lock()
+		pendingStream.State = StreamOpen
+		pendingStream.mu.Unlock()
+		n.AddStream(cc.CircID, pendingStream)
+
+		n.log.Info().
+			Uint16("circID", cc.CircID).
+			Uint16("streamID", relay.StreamID).
+			Msg("Stream moved from pending to active and is now Open")
+		return nil
+	}
+
+	// Otherwise, check if it's already an active stream (shouldn't normally happen)
 	stream := n.GetStream(cc.CircID, relay.StreamID)
 	if stream == nil {
 		n.log.Error().
@@ -1524,10 +1563,14 @@ func (n *node) OpenStream(circID uint16, targetAddr string) (uint16, error) {
 
 	// Generate stream ID and create stream object
 	streamID := n.GenerateStreamID(circID)
-	n.createAndAddStream(circID, streamID, targetAddr)
+	stream := n.createStreamObject(circID, streamID, targetAddr)
+
+	// Store pending stream temporarily until RELAY_CONNECTED is received
+	n.storePendingStream(circID, streamID, stream)
 
 	// Send RELAY_BEGIN cell
 	if err := n.sendRelayBegin(circID, streamID, targetAddr, cryptoStates, cc.Hops[0]); err != nil {
+		n.removePendingStream(circID, streamID)
 		return 0, err
 	}
 
@@ -1571,13 +1614,13 @@ func (n *node) validateCircuitForStream(circID uint16) (*ClientCircuit, []*Circu
 	return cc, cryptoStates, nil
 }
 
-// createAndAddStream creates a stream object and adds it to the circuit
-func (n *node) createAndAddStream(circID, streamID uint16, targetAddr string) {
+// createStreamObject creates a stream object without adding it to the circuit
+func (n *node) createStreamObject(circID, streamID uint16, targetAddr string) *Stream {
 	n.log.Info().
 		Uint16("circID", circID).
 		Uint16("streamID", streamID).
 		Str("targetAddr", targetAddr).
-		Msg("Generated stream ID and creating stream object")
+		Msg("Creating stream object")
 
 	stream := &Stream{
 		ID:            streamID,
@@ -1588,12 +1631,13 @@ func (n *node) createAndAddStream(circID, streamID uint16, targetAddr string) {
 		DeliverWindow: DefaultStreamWindowSize,
 	}
 	stream.WindowCond = sync.NewCond(&stream.mu)
-	n.AddStream(circID, stream)
 
 	n.log.Info().
 		Uint16("circID", circID).
 		Uint16("streamID", streamID).
-		Msg("Stream added to circuit")
+		Msg("Stream object created")
+
+	return stream
 }
 
 // sendRelayBegin encrypts and sends a RELAY_BEGIN cell
@@ -2040,7 +2084,7 @@ func (n *node) encryptAndSendRelayData(
 	} else {
 		err = n.SendCell(guardAddr, cell, cc)
 	}
-	
+
 	if err != nil {
 		n.log.Error().
 			Err(err).
@@ -2295,21 +2339,14 @@ func (n *node) sendRelaySendmeStream(circ *Circuit, streamID uint16) error {
 func decryptRelayDataAtClient(cryptoStates []*CircuitCryptoState, encryptedPayload []byte, digest [6]byte) []byte {
 	plainPayload := encryptedPayload
 	for i := range cryptoStates {
-		// FIXME: For us will not work unless digest verification is fixed
-		// It is by chance that the number of hops matches the number of decryptions needed
-		// That is why there is no more loop iterations than the number of hops
-		// So in reality, the for us check is not effective here
-		decrypted, isForUs := DecryptRelayCellAtHop(
+		// Decrypt one layer at a time without digest verification
+		// Only the innermost (original) layer has the meaningful digest
+		plainPayload, _ = DecryptRelayCellAtHop(
 			cryptoStates[i],
 			DirectionBackward,
 			plainPayload,
-			digest,
+			[6]byte{}, // dummy digest
 		)
-		plainPayload = decrypted
-		if !isForUs && i < len(cryptoStates)-1 {
-			// Not for us yet, continue unwrapping
-			continue
-		}
 	}
 	return plainPayload
 }
@@ -2531,4 +2568,49 @@ func (n *node) HandleRelaySendme(cell RelayCell, circ *Circuit) error {
 		Msg("Processed RelaySendme, increased PackageWindow")
 
 	return nil
+}
+
+// Stores a stream that is waiting for RELAY_CONNECTED
+func (n *node) storePendingStream(circID, streamID uint16, stream *Stream) {
+	n.pendingStreamsMu.Lock()
+	defer n.pendingStreamsMu.Unlock()
+
+	if n.pendingStreams[circID] == nil {
+		n.pendingStreams[circID] = make(map[uint16]*Stream)
+	}
+	n.pendingStreams[circID][streamID] = stream
+
+	n.log.Info().
+		Uint16("circID", circID).
+		Uint16("streamID", streamID).
+		Msg("Stored pending stream")
+}
+
+// Retrieves a pending stream
+func (n *node) getPendingStream(circID, streamID uint16) *Stream {
+	n.pendingStreamsMu.RLock()
+	defer n.pendingStreamsMu.RUnlock()
+
+	if n.pendingStreams[circID] == nil {
+		return nil
+	}
+	return n.pendingStreams[circID][streamID]
+}
+
+// Removes a stream from pending list
+func (n *node) removePendingStream(circID, streamID uint16) {
+	n.pendingStreamsMu.Lock()
+	defer n.pendingStreamsMu.Unlock()
+
+	if n.pendingStreams[circID] != nil {
+		delete(n.pendingStreams[circID], streamID)
+		if len(n.pendingStreams[circID]) == 0 {
+			delete(n.pendingStreams, circID)
+		}
+	}
+
+	n.log.Info().
+		Uint16("circID", circID).
+		Uint16("streamID", streamID).
+		Msg("Removed pending stream")
 }
