@@ -172,7 +172,6 @@ func (n *node) SendAndWaitForIntroReply(circID uint16, serviceID string, cell Ce
 
 	select {
 	case <-ch:
-		//TODO: Simplified, Bob can choose the OR that acts as a introduction point
 		hs.IntroPoints = append(hs.IntroPoints, IntroPoint{
 			RouterAddr: cc.Hops[len(cc.Hops)-1],
 			CircID:     circID,
@@ -902,7 +901,7 @@ func (n *node) HandleRelayHSDirReply(relay RelayCell) error {
 	cryptoStates := n.circuitCryptoStates[relay.CircID]
 	n.cryptoStatesMu.Unlock()
 
-	plaintext := decryptRelayDataAtClient(cryptoStates, relay.Data, relay.Digest)
+	plaintext := decryptRelayDataAtClient(cryptoStates, relay.Data)
 
 	hdr, chunk, err := DecodeFragment(plaintext)
 	if err != nil {
@@ -1497,7 +1496,7 @@ func (n *node) HandleRelayIntroduceACK(relay RelayCell) error {
 	}
 
 	// Check if the introduction was successful
-	flag := decryptRelayDataAtClient(cryptoStates, relay.Data, relay.Digest)[0]
+	flag := decryptRelayDataAtClient(cryptoStates, relay.Data)[0]
 	var success bool
 	switch flag {
 	case IntroduceACKSuccess:
@@ -1942,7 +1941,7 @@ func (n *node) HandleRelayIntroduce2(relay RelayCell) error {
 	}
 
 	// Decode outer message
-	plaintext := decryptRelayDataAtClient(cryptoStates, relay.Data, relay.Digest)
+	plaintext := decryptRelayDataAtClient(cryptoStates, relay.Data)
 	ipIntroMsg, err := DecodeIPIntroduceMessage(plaintext)
 	if err != nil {
 		return fmt.Errorf("failed to decode IP introduce message: %w", err)
@@ -2112,10 +2111,9 @@ func (n *node) HandleRelayRendezvous1(relay RelayCell, circ *Circuit) error {
 		Msg("Rendezvous1 received at rendezvous point")
 
 	data := relay.Data
-	cookie := string(data[:CookieSize])
 
 	n.rendezvousEntryMu.Lock()
-	aliceCircID, ok := n.rendezvousEntries[cookie]
+	aliceCircID, ok := n.rendezvousEntries[string(data[:CookieSize])]
 	n.rendezvousEntryMu.Unlock()
 
 	if !ok {
@@ -2189,7 +2187,7 @@ func (n *node) HandleRelayRendezvous2(relay RelayCell) error {
 		return fmt.Errorf("no crypto states for circuit %d", relay.CircID)
 	}
 
-	data := decryptRelayDataAtClient(cryptoStates, relay.Data, relay.Digest)
+	data := decryptRelayDataAtClient(cryptoStates, relay.Data)
 
 	cookie := data[:CookieSize]
 	bobPub := data[CookieSize : CookieSize+32]
