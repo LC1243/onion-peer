@@ -824,3 +824,128 @@ func Test_TO_HS_EncodeDecodeIPIntroductionMessage_Succeeds(t *testing.T) {
 	require.Equal(t, msg.ServiceID, decoded.ServiceID, "Service IDs should match")
 	require.Equal(t, msg.EncryptedBlob, decoded.EncryptedBlob, "Encrypted blobs should match")
 }
+
+// Test_TOR_HS_Rendezvous_FullHandshake_Succeeds tests the full rendezvous handshake:
+//  1. Bob creates a hidden service and publishes its descriptor to an HSDir
+//  2. Bob establishes an introduction point for the service
+//  3. Alice builds a circuit to a rendezvous point (RP)
+//  4. Alice prepares the rendezvous point and obtains a cookie
+//  5. Alice builds a circuit to the introduction point
+//  6. Alice sends an INTRODUCE1 message containing the rendezvous cookie and RP address
+//  7. The introduction point forwards INTRODUCE2 to Bob
+//  8. Bob connects to the rendezvous point and sends RENDEZVOUS1
+//  9. The rendezvous point forwards RENDEZVOUS2 to Alice
+//  10. Alice extends her RP circuit with a new crypto state shared with Bob
+func Test_TOR_HS_Rendezvous_FullHandshake_Succeeds(t *testing.T) {
+	transp := channelFac()
+
+	// Alice (client)
+	alice := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer alice.Stop()
+
+	// Bob
+	bob := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer bob.Stop()
+
+	// Bob -> HSDir
+	hsGuard := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer hsGuard.Stop()
+	hsMiddle := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer hsMiddle.Stop()
+	hsDir := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer hsDir.Stop()
+
+	hsDir.Peer.SetPeerAsHSDir(true)
+
+	// Bob -> Introduction Point
+	guardIntro := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer guardIntro.Stop()
+	middleIntro := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer middleIntro.Stop()
+	introPoint := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer introPoint.Stop()
+
+	// Alice -> Rendezvous point
+	guardRp := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer guardRp.Stop()
+	middleRp := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer middleRp.Stop()
+	rp := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer rp.Stop()
+
+	// Alice -> Introduction Point
+	guardAliceIntro := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer guardAliceIntro.Stop()
+	middleAliceIntro := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer middleAliceIntro.Stop()
+
+	nodes := []z.TestNode{
+		alice, bob,
+		hsGuard, hsMiddle, hsDir,
+		guardIntro, middleIntro, introPoint,
+		guardRp, middleRp, rp,
+		guardAliceIntro, middleAliceIntro,
+	}
+
+	for _, n := range nodes {
+		for _, m := range nodes {
+			if n != m {
+				n.AddPeer(m.GetAddr())
+			}
+		}
+	}
+
+	time.Sleep(100 * time.Millisecond)
+	z.PopulateOnionKeys(nodes)
+
+	// Bob creates a circuit to HSDir
+	circID, err := bob.Peer.BuildCircuit(
+		[3]string{hsGuard.GetAddr(), hsMiddle.GetAddr(), hsDir.GetAddr()},
+		5*time.Second,
+	)
+	require.NoError(t, err)
+
+	// Bob creates a hidden service with one introduction point
+	introPoints := [][3]string{{guardIntro.GetAddr(), middleIntro.GetAddr(), introPoint.GetAddr()}}
+	serviceID, _, err := bob.Peer.CreateHiddenService(
+		introPoints, 5*time.Second, time.Minute, circID)
+	require.NoError(t, err)
+
+	// Alice builds a circuit to the RP
+	aliceRPCirc, err := alice.Peer.BuildCircuit(
+		[3]string{guardRp.GetAddr(), middleRp.GetAddr(), rp.GetAddr()},
+		5*time.Second,
+	)
+	require.NoError(t, err)
+
+	// Alice establishes a rendezvous point
+	cookie, err := alice.Peer.PrepareRendezvousPoint(aliceRPCirc, time.Second)
+	require.NoError(t, err)
+
+	// Alice builds a circuit to the introduction point
+	aliceIntroCirc, err := alice.Peer.BuildCircuit(
+		[3]string{guardAliceIntro.GetAddr(), middleAliceIntro.GetAddr(), introPoint.GetAddr()},
+		5*time.Second,
+	)
+	require.NoError(t, err)
+
+	// Alice sends Introduce1
+	cryptoStateBefore := alice.Peer.GetCircuitCryptoStatesCount(aliceRPCirc)
+	err = alice.Peer.IntroduceToHiddenService(
+		aliceIntroCirc,
+		serviceID,
+		bob.Peer.GetServicePublicKey(serviceID),
+		cookie,
+		rp.GetAddr(),
+		time.Second,
+	)
+	require.NoError(t, err)
+
+	time.Sleep(300 * time.Millisecond)
+	require.Equal(
+		t,
+		cryptoStateBefore+1,
+		alice.Peer.GetCircuitCryptoStatesCount(aliceRPCirc),
+		"rendezvous must extend Alice circuit",
+	)
+}

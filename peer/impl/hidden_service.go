@@ -117,7 +117,9 @@ func (n *node) EstablishIntroPoint(serviceID string, circID uint16, timeout time
 	pubBytes := x509.MarshalPKCS1PublicKey(hs.KeyPair.Public)
 	payload := pubBytes
 
+	n.cryptoStatesMu.Lock()
 	cryptoStates := n.circuitCryptoStates[circID]
+	n.cryptoStatesMu.Unlock()
 	if len(cryptoStates) == 0 {
 		return fmt.Errorf("no crypto state for circ %d", circID)
 	}
@@ -213,7 +215,9 @@ func (n *node) HandleRelayEstablishIntro(relay RelayCell, circ *Circuit) error {
 
 // SendRelayIntroEstablished sends an acknowledgment to Bob saying is ready to receive traffic
 func (n *node) SendRelayIntroEstablished(circ *Circuit) error {
+	n.cryptoStatesMu.Lock()
 	cryptoStates := n.circuitCryptoStates[circ.InCircID]
+	n.cryptoStatesMu.Unlock()
 	exitIdx := len(cryptoStates) - 1
 	cryptoState := cryptoStates[exitIdx]
 
@@ -730,7 +734,9 @@ func (n *node) SendHSDirReply(circ *Circuit, payload []byte) error {
 		frags = [][]byte{{}}
 	}
 
+	n.cryptoStatesMu.Lock()
 	cryptoState := n.circuitCryptoStates[circ.InCircID][len(n.circuitCryptoStates[circ.InCircID])-1]
+	n.cryptoStatesMu.Unlock()
 
 	return n.SendFragmentsBackward(frags, msgID, circ, cryptoState, RelayHSDirReply)
 }
@@ -764,7 +770,10 @@ func (n *node) PublishDescriptorToHSDir(serviceID string,
 		return err
 	}
 
+	n.cryptoStatesMu.Lock()
 	cryptoStates := n.circuitCryptoStates[circID]
+	n.cryptoStatesMu.Unlock()
+
 	cc := n.clientCircuits[circID]
 
 	err = n.SendFragments(frags, msgID, circID, cc, cryptoStates, RelayHSDirPublish)
@@ -803,7 +812,10 @@ func (n *node) LookupDescriptorViaHSDir(circID uint16, serviceID string, timeout
 		return nil, fmt.Errorf("not a client circuit %d", circID)
 	}
 
+	n.cryptoStatesMu.Lock()
 	cryptoStates := n.circuitCryptoStates[circID]
+	n.cryptoStatesMu.Unlock()
+
 	if len(cryptoStates) == 0 {
 		return nil, fmt.Errorf("no crypto states for circuit %d", circID)
 	}
@@ -886,7 +898,10 @@ func (n *node) HandleRelayHSDirReply(relay RelayCell) error {
 		return nil
 	}
 
+	n.cryptoStatesMu.Lock()
 	cryptoStates := n.circuitCryptoStates[relay.CircID]
+	n.cryptoStatesMu.Unlock()
+
 	plaintext := decryptRelayDataAtClient(cryptoStates, relay.Data, relay.Digest)
 
 	hdr, chunk, err := DecodeFragment(plaintext)
@@ -1189,7 +1204,9 @@ func (n *node) DeleteDescriptorFromHSDir(serviceID string, circID uint16, timeou
 		return err
 	}
 
+	n.cryptoStatesMu.Lock()
 	cryptoStates := n.circuitCryptoStates[circID]
+	n.cryptoStatesMu.Unlock()
 
 	replyCh := make(chan *ServiceDescriptor, 1)
 
@@ -1273,7 +1290,7 @@ func (n *node) PrepareRendezvousPoint(circID uint16, timeout time.Duration) (coo
 
 	// Bind cookie → RP circuit
 	n.cryptoStatesMu.Lock()
-	n.rendezvousStates[string(cookie[:])] = &DhRendezvousState{
+	n.rendezvousStates[string(rendezvousCookie[:])] = &DhRendezvousState{
 		CircID:     circID, // RP circuit
 		PrivateKey: privateKey,
 		PublicKey:  publicKey,
@@ -1322,7 +1339,10 @@ func (n *node) SendRelayEstablishRP(circID uint16, cookie [CookieSize]byte) erro
 		return fmt.Errorf("circuit %d not ready", circID)
 	}
 
+	n.cryptoStatesMu.Lock()
 	cryptoStates := n.circuitCryptoStates[circID]
+	n.cryptoStatesMu.Unlock()
+
 	if len(cryptoStates) == 0 {
 		return fmt.Errorf("no crypto states for circuit %d", circID)
 	}
@@ -1365,8 +1385,10 @@ func (n *node) HandleRelayRPEstablished(relay RelayCell) error {
 
 // SendRPEstablished sends an ACK relay cell to confirm the rendezvous point establishment
 func (n *node) SendRPEstablished(circ *Circuit) error {
+	n.cryptoStatesMu.Lock()
 	exitIdx := len(n.circuitCryptoStates[circ.InCircID]) - 1
 	cryptoState := n.circuitCryptoStates[circ.InCircID][exitIdx]
+	n.cryptoStatesMu.Unlock()
 
 	// no payload for ACK, still need to compute digest
 	emptyPayload, digest, err := EncryptRelayPayload(cryptoState, DirectionBackward, []byte{})
@@ -1430,8 +1452,10 @@ func (n *node) GetRendezvousEntriesCount() int {
 
 // SendIntroduceAck sends an Introduce ACK relay cell to the client indicating success or failure of the introduction
 func (n *node) SendIntroduceAck(circ *Circuit, success bool) error {
+	n.cryptoStatesMu.Lock()
 	exitIdx := len(n.circuitCryptoStates[circ.InCircID]) - 1
 	cryptoState := n.circuitCryptoStates[circ.InCircID][exitIdx]
+	n.cryptoStatesMu.Unlock()
 
 	var flag byte
 	if success {
@@ -1465,7 +1489,9 @@ func (n *node) HandleRelayIntroduceACK(relay RelayCell) error {
 		return fmt.Errorf("invalid introduce ACK payload")
 	}
 
+	n.cryptoStatesMu.Lock()
 	cryptoStates := n.circuitCryptoStates[relay.CircID]
+	n.cryptoStatesMu.Unlock()
 	if len(cryptoStates) == 0 {
 		return fmt.Errorf("no crypto states for circuit %d", relay.CircID)
 	}
@@ -1668,7 +1694,9 @@ func (n *node) SendIntroduce1Message(circID uint16, serviceID string,
 	n.clientCircuitsMu.Unlock()
 
 	// Get crypto states for the circuit
+	n.cryptoStatesMu.Lock()
 	cryptoStates := n.circuitCryptoStates[circID]
+	n.cryptoStatesMu.Unlock()
 	if len(cryptoStates) == 0 {
 		return fmt.Errorf("no crypto states for circuit %d", circID)
 	}
@@ -1746,8 +1774,10 @@ func (n *node) SendIntroduce1Message(circID uint16, serviceID string,
 
 // SendIntroduce2Message sends an introduce2 message to the hidden service from the introduction point
 func (n *node) SendIntroduce2Message(circ *Circuit, encryptedBlob []byte) error {
+	n.cryptoStatesMu.Lock()
 	exitIdx := len(n.circuitCryptoStates[circ.InCircID]) - 1
 	cryptoState := n.circuitCryptoStates[circ.InCircID][exitIdx]
+	n.cryptoStatesMu.Unlock()
 
 	payload, digest, err := EncryptRelayPayload(cryptoState, DirectionBackward, encryptedBlob)
 	if err != nil {
@@ -1771,12 +1801,15 @@ func (n *node) SendIntroduce2Message(circ *Circuit, encryptedBlob []byte) error 
 
 // HandleRelayIntroduce1 handles an introduce1 relay cell received at the introduction point
 func (n *node) HandleRelayIntroduce1(relay RelayCell, circ *Circuit) error {
+	n.cryptoStatesMu.Lock()
 	cryptoStates := n.circuitCryptoStates[relay.CircID]
+	n.cryptoStatesMu.Unlock()
 	if len(cryptoStates) == 0 {
 		return fmt.Errorf("no crypto states for circuit %d", relay.CircID)
 	}
 
 	ipIntroMsg, err := DecodeIPIntroduceMessage(relay.Data)
+
 	if err != nil {
 		return fmt.Errorf("failed to decode IP introduce message: %w", err)
 	}
@@ -1821,7 +1854,11 @@ func (n *node) HandleRelayIntroduce1(relay RelayCell, circ *Circuit) error {
 		return fmt.Errorf("no circuit found for BobCircID")
 	}
 
-	err = n.SendIntroduce2Message(targetCirc, ipIntroMsg.EncryptedBlob)
+	payload, err := EncodeIPIntroduceMessage(ipIntroMsg)
+	if err != nil {
+		return fmt.Errorf("failed to encode IP introduce message: %w", err)
+	}
+	err = n.SendIntroduce2Message(targetCirc, payload)
 	if err != nil {
 		return fmt.Errorf("failed to send introduce2 message: %w", err)
 	}
@@ -1891,14 +1928,22 @@ func (n *node) IntroduceToHiddenService(circID uint16, serviceID string,
 }
 
 // HandleRelayIntroduce2 handles an introduce2 relay cell received at the node who owns the hidden service
-func (n *node) HandleRelayIntroduce2(relay RelayCell, circ *Circuit) error {
+func (n *node) HandleRelayIntroduce2(relay RelayCell) error {
+	n.log.Info().
+		Uint16("circID", relay.CircID).
+		Msg("Received introduce2 message at hidden service")
+
+	n.cryptoStatesMu.Lock()
 	cryptoStates := n.circuitCryptoStates[relay.CircID]
+	n.cryptoStatesMu.Unlock()
+
 	if len(cryptoStates) == 0 {
 		return fmt.Errorf("no crypto states for circuit %d", relay.CircID)
 	}
 
 	// Decode outer message
-	ipIntroMsg, err := DecodeIPIntroduceMessage(relay.Data)
+	plaintext := decryptRelayDataAtClient(cryptoStates, relay.Data, relay.Digest)
+	ipIntroMsg, err := DecodeIPIntroduceMessage(plaintext)
 	if err != nil {
 		return fmt.Errorf("failed to decode IP introduce message: %w", err)
 	}
@@ -1942,18 +1987,32 @@ func (n *node) HandleRelayIntroduce2(relay RelayCell, circ *Circuit) error {
 	}
 	n.cryptoStatesMu.Unlock()
 
+	go func() {
+		err := n.SendRelayRendezvous1(relay.CircID, serviceIntro.Cookie, serviceIntro.RPAddr)
+		if err != nil {
+			n.log.Error().Err(err).
+				Uint16("introCircID", relay.CircID).
+				Str("rpAddr", serviceIntro.RPAddr).
+				Msg("failed to build/send rendezvous1")
+		}
+	}()
+
 	n.log.Info().
 		Str("serviceID", ipIntroMsg.ServiceID).
 		Str("rpAddr", serviceIntro.RPAddr).
 		Msg("Introduce2 received, starting rendezvous")
 
-	// Build circuit to RP and send Rendezvous1
-	return n.SendRelayRendezvous1(relay.CircID, serviceIntro.Cookie, serviceIntro.RPAddr)
+	return nil
 }
 
 // SendRelayRendezvous1 builds a circuit to Alice RP, sending the Rendezvous cookie, and the second half of the DH
 // handshake and a hash of the session key
 func (n *node) SendRelayRendezvous1(circID uint16, cookie [CookieSize]byte, rendezvousAddr string) error {
+	n.log.Info().
+		Uint16("introCircID", circID).
+		Str("rpAddr", rendezvousAddr).
+		Msg("Building circuit to rendezvous point")
+
 	// Retrieve DH state from INTRODUCE1
 	n.cryptoStatesMu.Lock()
 	dhState, ok := n.diffieHellmanHandshakePairs[circID]
@@ -1969,6 +2028,10 @@ func (n *node) SendRelayRendezvous1(circID uint16, cookie [CookieSize]byte, rend
 		return fmt.Errorf("failed to build random path: %w", err)
 	}
 
+	n.log.Info().
+		Str("rpAddr", rendezvousAddr).
+		Msg("Building circuit to rendezvous point")
+
 	rpCircID, err := n.BuildCircuit([3]string{
 		middleHops[0],
 		middleHops[1],
@@ -1979,7 +2042,14 @@ func (n *node) SendRelayRendezvous1(circID uint16, cookie [CookieSize]byte, rend
 		return fmt.Errorf("failed to build circuit to RP: %w", err)
 	}
 
+	n.log.Info().
+		Uint16("rpCircID", rpCircID).
+		Msg("Circuit to rendezvous point built")
+
+	n.cryptoStatesMu.Lock()
 	cryptoStates := n.circuitCryptoStates[rpCircID]
+	n.cryptoStatesMu.Unlock()
+
 	if len(cryptoStates) == 0 {
 		return fmt.Errorf("no crypto states for RP circuit")
 	}
@@ -2029,10 +2099,18 @@ func (n *node) SendRelayRendezvous1(circID uint16, cookie [CookieSize]byte, rend
 		return err
 	}
 
+	n.log.Info().
+		Uint16("rpCircID", rpCircID).
+		Msg("Sending Rendezvous1 to rendezvous point")
+
 	return n.SendCell(n.clientCircuits[rpCircID].Hops[0], cell)
 }
 
 func (n *node) HandleRelayRendezvous1(relay RelayCell, circ *Circuit) error {
+	n.log.Info().
+		Uint16("circID", relay.CircID).
+		Msg("Rendezvous1 received at rendezvous point")
+
 	data := relay.Data
 	cookie := string(data[:CookieSize])
 
@@ -2059,6 +2137,9 @@ func (n *node) HandleRelayRendezvous1(relay RelayCell, circ *Circuit) error {
 		return fmt.Errorf("alice circuit not found for rendezvous")
 	}
 
+	n.log.Info().
+		Uint16("aliceCircID", aliceCircID).
+		Msg("Forwarding Rendezvous2 to Alice")
 	return n.SendRelayRendezvous2(data, aliceCircID, aliceCirc)
 }
 
@@ -2066,8 +2147,10 @@ func (n *node) HandleRelayRendezvous1(relay RelayCell, circ *Circuit) error {
 func (n *node) SendRelayRendezvous2(data []byte, circID uint16, circ *Circuit) error {
 
 	// Forward Rendezvous1 payload backward to Alice
+	n.cryptoStatesMu.Lock()
 	exitIdx := len(n.circuitCryptoStates[circID]) - 1
 	cryptoState := n.circuitCryptoStates[circID][exitIdx]
+	n.cryptoStatesMu.Unlock()
 
 	payload, digest, err := EncryptRelayPayload(cryptoState, DirectionBackward, data)
 
@@ -2094,10 +2177,21 @@ func (n *node) SendRelayRendezvous2(data []byte, circID uint16, circ *Circuit) e
 
 // HandleRelayRendezvous2 receives the following message: Cookie | second half of DH | H(session_key)
 // from Bob, which was forwarded from RP to Alice.
-func (n *node) HandleRelayRendezvous2(relay RelayCell, circ *Circuit) error {
-	data := relay.Data
+func (n *node) HandleRelayRendezvous2(relay RelayCell) error {
+	n.log.Info().
+		Uint16("circID", relay.CircID).
+		Msg("Received Rendezvous2 from rendezvous point")
 
-	cookie := relay.Data[:CookieSize]
+	n.cryptoStatesMu.Lock()
+	cryptoStates := n.circuitCryptoStates[relay.CircID]
+	n.cryptoStatesMu.Unlock()
+	if len(cryptoStates) == 0 {
+		return fmt.Errorf("no crypto states for circuit %d", relay.CircID)
+	}
+
+	data := decryptRelayDataAtClient(cryptoStates, relay.Data, relay.Digest)
+
+	cookie := data[:CookieSize]
 	bobPub := data[CookieSize : CookieSize+32]
 	recvHash := data[CookieSize+32 : CookieSize+64]
 
