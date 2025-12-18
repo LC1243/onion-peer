@@ -479,6 +479,8 @@ func (n *node) HandleRelayAtEndpoint(relayCell RelayCell, circ *Circuit) error {
 		return n.HandleRelayEstablishIntro(relayCell, circ)
 	case RelayRendezvous1:
 		return n.HandleRelayRendezvous1(relayCell, circ)
+	case RelayRendezvous2:
+		return n.HandleRelayRendezvous2(relayCell, circ)
 	case RelayHSDirPublish:
 		return n.HandleRelayHSDirPublish(relayCell, circ)
 	case RelayHSDirLookup:

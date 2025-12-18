@@ -2016,5 +2016,108 @@ func (n *node) SendRelayRendezvous1(circID uint16, rendezvousAddr string) error 
 }
 
 func (n *node) HandleRelayRendezvous1(relay RelayCell, circ *Circuit) error {
+	data := relay.Data
+	cookie := string(data[:CookieSize])
+
+	n.rendezvousEntryMu.Lock()
+	aliceCircID, ok := n.rendezvousEntries[cookie]
+	n.rendezvousEntryMu.Unlock()
+
+	if !ok {
+		return fmt.Errorf("unknown rendezvous cookie")
+	}
+
+	// Find Alice circuit
+	n.circuitsMu.Lock()
+	var aliceCirc *Circuit
+	for _, c := range n.circuits {
+		if c.InCircID == aliceCircID {
+			aliceCirc = c
+			break
+		}
+	}
+	n.circuitsMu.Unlock()
+
+	if aliceCirc == nil {
+		return fmt.Errorf("alice circuit not found for rendezvous")
+	}
+
+	return n.SendRelayRendezvous2(data, aliceCircID, aliceCirc)
+}
+
+// SendRelayRendezvous2 sends a message from RP to Alice with Bob's second half of the DH handshake, the hash and cookie
+func (n *node) SendRelayRendezvous2(data []byte, circID uint16, circ *Circuit) error {
+
+	// Forward Rendezvous1 payload backward to Alice
+	exitIdx := len(n.circuitCryptoStates[circID]) - 1
+	cryptoState := n.circuitCryptoStates[circID][exitIdx]
+
+	payload, digest, err := EncryptRelayPayload(cryptoState, DirectionBackward, data)
+
+	if err != nil {
+		return err
+	}
+
+	relayOut := RelayCell{
+		CircID:   circID,
+		StreamID: 0,
+		Command:  RelayRendezvous2,
+		Digest:   digest,
+		Length:   uint16(len(payload)),
+		Data:     payload,
+	}
+
+	cell, err := n.EncodeRelayCell(relayOut)
+	if err != nil {
+		return err
+	}
+
+	return n.SendCell(circ.PrevHop, cell)
+}
+
+// HandleRelayRendezvous2 receives the following message: Cookie | second half of DH | H(session_key)
+// from Bob, which was forwarded from Alice to RP.
+func (n *node) HandleRelayRendezvous2(relay RelayCell, circ *Circuit) error {
+	data := relay.Data
+
+	bobPub := data[CookieSize : CookieSize+32]
+	recvHash := data[CookieSize+32 : CookieSize+64]
+
+	n.cryptoStatesMu.Lock()
+	dhState := n.diffieHellmanHandshakePairs[relay.CircID]
+	n.cryptoStatesMu.Unlock()
+
+	if dhState == nil {
+		return fmt.Errorf("no DH state for rendezvous")
+	}
+
+	// Compute shared secret
+	shared, err := curve25519.X25519(dhState.PrivateKey[:], bobPub)
+	if err != nil {
+		return err
+	}
+
+	// Verify hash H(K)
+	h := sha256.New()
+	h.Write(shared)
+	expected := h.Sum(nil)
+
+	if !bytes.Equal(expected, recvHash) {
+		return fmt.Errorf("rendezvous handshake hash mismatch")
+	}
+
+	// Derive circuit crypto keys
+	cryptoState, err := generateCircuitKeys(shared)
+	if err != nil {
+		return err
+	}
+
+	n.circuitCryptoStates[relay.CircID] =
+		append(n.circuitCryptoStates[relay.CircID], cryptoState)
+
+	n.log.Info().
+		Uint16("circID", relay.CircID).
+		Msg("Rendezvous handshake complete, circuit joined")
+
 	return nil
 }
