@@ -62,6 +62,12 @@ type ServiceIntroduceMessage struct {
 	ClientDHPub []byte
 }
 
+type DhRendezvousState struct {
+	CircID     uint16
+	PrivateKey [32]byte
+	PublicKey  [32]byte
+}
+
 // GenerateServiceKeyPair generates a new RSA keypair for use as keys for a service
 func GenerateServiceKeyPair() (*OnionKeyPair, error) {
 	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
@@ -1659,7 +1665,8 @@ func (n *node) SendIntroduce1Message(circID uint16, serviceID string,
 
 	// Store the DH state for completing the handshake later (when Bob connects to RP)
 	n.cryptoStatesMu.Lock()
-	n.diffieHellmanHandshakePairs[circID] = &DiffieHellmanHandshakePairs{
+	n.rendezvousStates[string(cookie[:])] = &DhRendezvousState{
+		CircID:     circID,
 		PrivateKey: privateKey,
 		PublicKey:  publicKey,
 	}
@@ -1931,12 +1938,12 @@ func (n *node) HandleRelayIntroduce2(relay RelayCell, circ *Circuit) error {
 		Msg("Introduce2 received, starting rendezvous")
 
 	// Build circuit to RP and send Rendezvous1
-	return n.SendRelayRendezvous1(relay.CircID, serviceIntro.RPAddr)
+	return n.SendRelayRendezvous1(relay.CircID, serviceIntro.Cookie, serviceIntro.RPAddr)
 }
 
 // SendRelayRendezvous1 builds a circuit to Alice RP, sending the Rendezvous cookie, and the second half of the DH
 // handshake and a hash of the session key
-func (n *node) SendRelayRendezvous1(circID uint16, rendezvousAddr string) error {
+func (n *node) SendRelayRendezvous1(circID uint16, cookie [CookieSize]byte, rendezvousAddr string) error {
 	// Retrieve DH state from INTRODUCE1
 	n.cryptoStatesMu.Lock()
 	dhState, ok := n.diffieHellmanHandshakePairs[circID]
@@ -1989,7 +1996,7 @@ func (n *node) SendRelayRendezvous1(circID uint16, rendezvousAddr string) error 
 
 	// Build payload
 	payload := bytes.NewBuffer(nil)
-	payload.Write(dhState.PublicKey[:CookieSize])
+	payload.Write(cookie[:])
 	payload.Write(bobPub[:])
 	payload.Write(handshakeHash)
 
@@ -2076,23 +2083,34 @@ func (n *node) SendRelayRendezvous2(data []byte, circID uint16, circ *Circuit) e
 }
 
 // HandleRelayRendezvous2 receives the following message: Cookie | second half of DH | H(session_key)
-// from Bob, which was forwarded from Alice to RP.
+// from Bob, which was forwarded from RP to Alice.
 func (n *node) HandleRelayRendezvous2(relay RelayCell, circ *Circuit) error {
 	data := relay.Data
+
+	cookie := relay.Data[:CookieSize]
+
+	n.rendezvousEntryMu.Lock()
+	expectedCircID, ok := n.rendezvousEntries[string(cookie)]
+	n.rendezvousEntryMu.Unlock()
+
+	if !ok || expectedCircID != relay.CircID {
+		return fmt.Errorf("unexpected rendezvous cookie")
+	}
 
 	bobPub := data[CookieSize : CookieSize+32]
 	recvHash := data[CookieSize+32 : CookieSize+64]
 
 	n.cryptoStatesMu.Lock()
-	dhState := n.diffieHellmanHandshakePairs[relay.CircID]
+	st := n.rendezvousStates[string(cookie)]
+	delete(n.rendezvousStates, string(cookie))
 	n.cryptoStatesMu.Unlock()
 
-	if dhState == nil {
+	if st == nil {
 		return fmt.Errorf("no DH state for rendezvous")
 	}
 
 	// Compute shared secret
-	shared, err := curve25519.X25519(dhState.PrivateKey[:], bobPub)
+	shared, err := curve25519.X25519(st.PrivateKey[:], bobPub)
 	if err != nil {
 		return err
 	}
@@ -2100,6 +2118,7 @@ func (n *node) HandleRelayRendezvous2(relay RelayCell, circ *Circuit) error {
 	// Verify hash H(K)
 	h := sha256.New()
 	h.Write(shared)
+	h.Write([]byte("handshake"))
 	expected := h.Sum(nil)
 
 	if !bytes.Equal(expected, recvHash) {
@@ -2112,8 +2131,8 @@ func (n *node) HandleRelayRendezvous2(relay RelayCell, circ *Circuit) error {
 		return err
 	}
 
-	n.circuitCryptoStates[relay.CircID] =
-		append(n.circuitCryptoStates[relay.CircID], cryptoState)
+	n.circuitCryptoStates[st.CircID] =
+		append(n.circuitCryptoStates[st.CircID], cryptoState)
 
 	n.log.Info().
 		Uint16("circID", relay.CircID).
