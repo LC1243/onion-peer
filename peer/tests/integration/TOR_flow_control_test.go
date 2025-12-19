@@ -414,7 +414,7 @@ func Test_TOR_FlowControl_SharedMiddle_TwoClients(t *testing.T) {
 					}
 					time.Sleep(10 * time.Millisecond)
 				}
-				time.Sleep(3 * time.Millisecond)
+				time.Sleep(5 * time.Millisecond)
 			}
 		}()
 
