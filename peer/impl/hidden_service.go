@@ -2124,55 +2124,29 @@ func (n *node) HandleRelayRendezvous1(relay RelayCell, circ *Circuit) error {
 		Msg("Rendezvous1 received at rendezvous point")
 
 	data := relay.Data
-	cookie := string(data[:CookieSize])
 
 	n.rendezvousEntryMu.Lock()
-	aliceCircID, ok := n.rendezvousEntries[cookie]
+	aliceCircID, ok := n.rendezvousEntries[string(data[:CookieSize])]
 	n.rendezvousEntryMu.Unlock()
 
 	if !ok {
 		return fmt.Errorf("unknown rendezvous cookie")
 	}
 
-	// Find Alice circuit and link with Bob's circuit
+	// Find Alice circuit
 	n.circuitsMu.Lock()
-	var aliceCircKey circuitKey
 	var aliceCirc *Circuit
-	var foundAlice bool
-
-	for k, c := range n.circuits {
+	for _, c := range n.circuits {
 		if c.InCircID == aliceCircID {
-			aliceCircKey = k
 			aliceCirc = c
-			foundAlice = true
 			break
 		}
 	}
-
-	if !foundAlice {
-		n.circuitsMu.Unlock()
-		n.log.Error().Uint16("aliceCircID", aliceCircID).Msg("Alice circuit not found")
-		return fmt.Errorf("alice circuit %d not found", aliceCircID)
-	}
-
-	// Determine Bob's circuit key
-	bobCircKey := circuitKey{PrevHop: circ.PrevHop, InCircID: circ.InCircID}
-
-	// Update Alice's circuit to point to Bob
-	aliceCirc.NextHop = circ.PrevHop
-	aliceCirc.OutCircID = circ.InCircID
-	n.circuits[aliceCircKey] = aliceCirc
-
-	// Update Bob's circuit to point to Alice
-	circ.NextHop = aliceCirc.PrevHop
-	circ.OutCircID = aliceCirc.InCircID
-	n.circuits[bobCircKey] = circ
 	n.circuitsMu.Unlock()
 
-	n.log.Info().
-		Uint16("aliceCircID", aliceCircID).
-		Uint16("bobCircID", circ.InCircID).
-		Msg("Linked Alice and Bob circuits at rendezvous point")
+	if aliceCirc == nil {
+		return fmt.Errorf("alice circuit not found for rendezvous")
+	}
 
 	n.log.Info().
 		Uint16("aliceCircID", aliceCircID).
