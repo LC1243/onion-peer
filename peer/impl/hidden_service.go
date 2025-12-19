@@ -165,7 +165,7 @@ func (n *node) SendAndWaitForIntroReply(circID uint16, serviceID string, cell Ce
 	n.introWaitMu.Unlock()
 
 	// Send it via guard of this circuit
-	err := n.SendCell(cc.Hops[0], cell)
+	err := n.SendCell(cc.Hops[0], cell, cc)
 	if err != nil {
 		return err
 	}
@@ -243,7 +243,7 @@ func (n *node) SendRelayIntroEstablished(circ *Circuit) error {
 		return err
 	}
 
-	return n.SendCell(circ.PrevHop, cell)
+	return n.SendCell(circ.PrevHop, cell, circ)
 }
 
 // HandleRelayIntroEstablished handles the ACK from the OR saying he's ready to receive traffic
@@ -417,7 +417,7 @@ func (n *node) SendFragmentsBackward(frags [][]byte,
 			return err
 		}
 
-		err = n.SendCell(circ.PrevHop, cell)
+		err = n.SendCell(circ.PrevHop, cell, circ)
 		if err != nil {
 			return err
 		}
@@ -464,7 +464,7 @@ func (n *node) SendFragments(frags [][]byte,
 			return err
 		}
 
-		err = n.SendCell(cc.Hops[0], cell)
+		err = n.SendCell(cc.Hops[0], cell, cc)
 		if err != nil {
 			return err
 		}
@@ -847,7 +847,7 @@ func (n *node) LookupDescriptorViaHSDir(circID uint16, serviceID string, timeout
 	n.hsdirWait[circID] = replyCh
 	n.hsdirWaitMu.Unlock()
 
-	err = n.SendCell(cc.Hops[0], cell)
+	err = n.SendCell(cc.Hops[0], cell, cc)
 	if err != nil {
 		return nil, err
 	}
@@ -1365,7 +1365,7 @@ func (n *node) SendRelayEstablishRP(circID uint16, cookie [CookieSize]byte) erro
 		return err
 	}
 
-	return n.SendCell(cc.Hops[0], cell)
+	return n.SendCell(cc.Hops[0], cell, cc)
 }
 
 // HandleRelayRPEstablished handles the ACK from the OR confirming the rendezvous point establishment
@@ -1407,7 +1407,7 @@ func (n *node) SendRPEstablished(circ *Circuit) error {
 	if err != nil {
 		return err
 	}
-	return n.SendCell(circ.PrevHop, cell)
+	return n.SendCell(circ.PrevHop, cell, circ)
 }
 
 // HandleRelayEstablishRP handles the establishment of a rendezvous point by storing the cookie
@@ -1479,7 +1479,7 @@ func (n *node) SendIntroduceAck(circ *Circuit, success bool) error {
 	if err != nil {
 		return err
 	}
-	return n.SendCell(circ.PrevHop, cell)
+	return n.SendCell(circ.PrevHop, cell, circ)
 }
 
 // HandleRelayIntroduceACK handles the Introduce ACK relay cell sent by the IP to the client
@@ -1758,7 +1758,7 @@ func (n *node) SendIntroduce1Message(circID uint16, serviceID string,
 		return fmt.Errorf("failed to encode relay cell: %w", err)
 	}
 
-	err = n.SendCell(n.clientCircuits[circID].Hops[0], cell)
+	err = n.SendCell(cc.Hops[0], cell, cc)
 	if err != nil {
 		return fmt.Errorf("failed to send cell: %w", err)
 	}
@@ -1795,7 +1795,7 @@ func (n *node) SendIntroduce2Message(circ *Circuit, encryptedBlob []byte) error 
 	if err != nil {
 		return err
 	}
-	return n.SendCell(circ.PrevHop, cell)
+	return n.SendCell(circ.PrevHop, cell, circ)
 }
 
 // HandleRelayIntroduce1 handles an introduce1 relay cell received at the introduction point
@@ -2102,7 +2102,11 @@ func (n *node) SendRelayRendezvous1(circID uint16, cookie [CookieSize]byte, rend
 		Uint16("rpCircID", rpCircID).
 		Msg("Sending Rendezvous1 to rendezvous point")
 
-	return n.SendCell(n.clientCircuits[rpCircID].Hops[0], cell)
+	n.clientCircuitsMu.RLock()
+	cc := n.clientCircuits[rpCircID]
+	n.clientCircuitsMu.RUnlock()
+
+	return n.SendCell(cc.Hops[0], cell, cc)
 }
 
 func (n *node) HandleRelayRendezvous1(relay RelayCell, circ *Circuit) error {
@@ -2170,7 +2174,7 @@ func (n *node) SendRelayRendezvous2(data []byte, circID uint16, circ *Circuit) e
 		return err
 	}
 
-	return n.SendCell(circ.PrevHop, cell)
+	return n.SendCell(circ.PrevHop, cell, circ)
 }
 
 // HandleRelayRendezvous2 receives the following message: Cookie | second half of DH | H(session_key)
