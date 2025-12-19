@@ -953,7 +953,7 @@ func Test_TOR_HS_IntroduceToHiddenService_Succeeds(t *testing.T) {
 				continue
 			}
 
-			n1.AddPeer(n1.GetAddr())
+			n1.AddPeer(n2.GetAddr())
 		}
 	}
 	time.Sleep(1 * time.Second)
@@ -1109,7 +1109,7 @@ func Test_TOR_HS_IntroduceToHiddenService_SmallTimeout_Fails(t *testing.T) {
 				continue
 			}
 
-			n1.AddPeer(n1.GetAddr())
+			n1.AddPeer(n2.GetAddr())
 		}
 	}
 	time.Sleep(1 * time.Second)
