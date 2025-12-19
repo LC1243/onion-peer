@@ -40,8 +40,8 @@ type CircuitScheduler struct {
 func NewCircuitScheduler(n *node) *CircuitScheduler {
 	return &CircuitScheduler{
 		node:          n,
-		interactiveCh: make(chan queuedPacket, 2000), // Buffer size
-		bulkCh:        make(chan queuedPacket, 2000),
+		interactiveCh: make(chan queuedPacket, 5000), // Buffer size
+		bulkCh:        make(chan queuedPacket, 5000),
 		stopCh:        make(chan struct{}),
 	}
 }
@@ -69,19 +69,16 @@ func (s *CircuitScheduler) Schedule(msg transport.Message, dest string, isBulk b
 		select {
 		case s.bulkCh <- qPkt:
 		default:
-			// Never block protocol handlers on scheduler backpressure.
-			// If we block here, we can deadlock flow-control (SENDME) under load.
-			s.node.log.Warn().Str("dest", dest).Msg("Bulk queue full, sending directly")
-			go func() { _ = s.node.Unicast(qPkt.dest, qPkt.msg) }()
+			s.node.log.Warn().Str("dest", dest).Msg("Bulk queue full, blocking")
+			s.bulkCh <- qPkt
 		}
 	} else {
 		s.node.log.Debug().Str("dest", dest).Msg("Scheduling interactive packet")
 		select {
 		case s.interactiveCh <- qPkt:
 		default:
-			// Never block protocol handlers on scheduler backpressure.
-			s.node.log.Warn().Str("dest", dest).Msg("Interactive queue full, sending directly")
-			go func() { _ = s.node.Unicast(qPkt.dest, qPkt.msg) }()
+			s.node.log.Warn().Str("dest", dest).Msg("Interactive queue full, blocking")
+			s.interactiveCh <- qPkt
 		}
 	}
 }
