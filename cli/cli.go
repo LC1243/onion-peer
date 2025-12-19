@@ -4,7 +4,6 @@ package main
 import (
 	"bufio"
 	"crypto/rsa"
-	"fmt"
 	"math/rand"
 	"os"
 	"strconv"
@@ -45,58 +44,57 @@ func init() {
 	if os.Getenv("CLILOG") == "no" {
 		level = zerolog.Disabled
 	}
-	writer := zerolog.ConsoleWriter{Out: os.Stdout, TimeFormat: time.RFC3339}
-	log = zerolog.New(writer).Level(level).With().Timestamp().Logger().
-		With().Str("role", "cli").Logger()
+	writer := zerolog.ConsoleWriter{Out: os.Stdout, TimeFormat: "", PartsOrder: []string{"message"}}
+	log = zerolog.New(writer).Level(level)
 }
 
 func main() {
-	fmt.Println("==============================================")
-	fmt.Println(" Welcome To TOR! Let's Keep You Anonymous!")
-	fmt.Println("==============================================")
-	fmt.Println()
+	log.Info().Msg("==============================================")
+	log.Info().Msg(" Welcome To TOR! Let's Keep You Anonymous!")
+	log.Info().Msg("==============================================")
+	log.Info().Msg("")
 
 	// Step 1: Get number of nodes
 	numNodes := promptForNodeCount()
 
 	// Step 2: Create nodes
-	fmt.Printf("\nCreating %d nodes...\n", numNodes)
+	log.Info().Msgf("\nCreating %d nodes...\n", numNodes)
 	createNodes(numNodes)
 
 	// Step 3: Display node addresses
-	fmt.Println("\nNode addresses:")
+	log.Info().Msg("\nNode addresses:")
 	for i, addr := range nodeAddrs {
-		fmt.Printf("\tNode %d: %s\n", i+1, addr)
+		log.Info().Msgf("\tNode %d: %s", i+1, addr)
 	}
 
 	// Step 4: Populate onion keys
-	fmt.Println("\nPopulating onion keys...")
+	log.Info().Msg("\nPopulating onion keys...")
 	populateOnionKeys()
-	fmt.Println("All onion keys distributed!")
+	log.Info().Msg("All onion keys distributed!")
 
 	// Step 5: Create initial circuit
-	fmt.Println("\nBuilding initial 3-hop circuit with random nodes...")
+	log.Info().Msg("\nBuilding initial 3-hop circuit with random nodes...")
 	createRandomCircuit()
 
 	// Step 6: Interactive menu
-	fmt.Println()
+	log.Info().Msg("")
 	runInteractiveMenu()
 
 	// Cleanup
-	fmt.Println("\nCleaning up...")
+	log.Info().Msg("\nCleaning up...")
 	cleanupNodes()
-	fmt.Println("Goodbye!")
+	log.Info().Msg("Goodbye!")
 }
 
 func promptForNodeCount() int {
 	for {
-		fmt.Print("Enter number of nodes to create (minimum 4): ")
+		log.Info().Msg("Enter number of nodes to create (minimum 4): ")
 		input, _ := reader.ReadString('\n')
 		input = strings.TrimSpace(input)
 
 		num, err := strconv.Atoi(input)
 		if err != nil || num < 4 {
-			fmt.Println("Please enter a valid number (minimum 4)")
+			log.Info().Msg("Please enter a valid number (minimum 4)")
 			continue
 		}
 		return num
@@ -112,7 +110,7 @@ func createNodes(numNodes int) {
 	for i := range numNodes {
 		socket, err := transp.CreateSocket("127.0.0.1:0")
 		if err != nil {
-			fmt.Printf("Failed to create socket for node %d: %v\n", i+1, err)
+			log.Error().Msgf("Failed to create socket for node %d: %v", i+1, err)
 			os.Exit(1)
 		}
 
@@ -131,18 +129,18 @@ func createNodes(numNodes int) {
 
 		err = node.Start()
 		if err != nil {
-			fmt.Printf("Failed to start node %d: %v\n", i+1, err)
+			log.Error().Msgf("Failed to start node %d: %v", i+1, err)
 			os.Exit(1)
 		}
 
 		nodes = append(nodes, node)
 		nodeAddrs = append(nodeAddrs, socket.GetAddress())
 
-		fmt.Printf("\tNode %d created at %s\n", i+1, socket.GetAddress())
+		log.Info().Msgf("\tNode %d created at %s", i+1, socket.GetAddress())
 	}
 
 	// Establish fully connected routing
-	fmt.Println("\nEstablishing fully connected routing...")
+	log.Info().Msg("\nEstablishing fully connected routing...")
 	for i, node1 := range nodes {
 		for j, addr2 := range nodeAddrs {
 			if i != j {
@@ -152,7 +150,7 @@ func createNodes(numNodes int) {
 	}
 
 	time.Sleep(100 * time.Millisecond)
-	fmt.Println("Fully Connected routing established!")
+	log.Info().Msg("Fully Connected routing established!")
 }
 
 func populateOnionKeys() {
@@ -176,7 +174,7 @@ func populateOnionKeys() {
 
 func createRandomCircuit() {
 	if len(nodes) < 4 {
-		fmt.Println("Need at least 4 nodes (1 client + 3 relays)")
+		log.Info().Msg("Need at least 4 nodes (1 client + 3 relays)")
 		return
 	}
 
@@ -199,20 +197,20 @@ func createRandomCircuit() {
 		nodeAddrs[relayIndices[2]],
 	}
 
-	fmt.Printf("  Client: Node 1 (%s)\n", nodeAddrs[clientIdx])
-	fmt.Printf("  Guard:  Node %d (%s)\n", relayIndices[0]+1, hops[0])
-	fmt.Printf("  Middle: Node %d (%s)\n", relayIndices[1]+1, hops[1])
-	fmt.Printf("  Exit:   Node %d (%s)\n", relayIndices[2]+1, hops[2])
+	log.Info().Msgf("  Client: Node 1 (%s)", nodeAddrs[clientIdx])
+	log.Info().Msgf("  Guard:  Node %d (%s)", relayIndices[0]+1, hops[0])
+	log.Info().Msgf("  Middle: Node %d (%s)", relayIndices[1]+1, hops[1])
+	log.Info().Msgf("  Exit:   Node %d (%s)", relayIndices[2]+1, hops[2])
 
-	fmt.Println("\nBuilding circuit...")
+	log.Info().Msg("\nBuilding circuit...")
 	circID, err := client.BuildCircuit(hops, 10*time.Second)
 	if err != nil {
-		fmt.Printf("Failed to build circuit: %v\n", err)
+		log.Error().Msgf("Failed to build circuit: %v", err)
 		return
 	}
 
 	circuits[nextCircID] = circID
-	fmt.Printf("Circuit #%d created successfully! (Internal ID: %d)\n", nextCircID, circID)
+	log.Info().Msgf("Circuit #%d created successfully! (Internal ID: %d)", nextCircID, circID)
 	nextCircID++
 
 	time.Sleep(200 * time.Millisecond)
@@ -220,18 +218,18 @@ func createRandomCircuit() {
 
 func runInteractiveMenu() {
 	for {
-		fmt.Println("\n==============================================")
-		fmt.Println("  MAIN MENU")
-		fmt.Println("==============================================")
-		fmt.Println("1. Create a new circuit")
-		fmt.Println("2. Create a new stream")
-		fmt.Println("3. Send a message")
-		fmt.Println("4. Close a stream")
-		fmt.Println("5. Close a circuit")
-		fmt.Println("6. Show status")
-		fmt.Println("7. Exit")
-		fmt.Println("==============================================")
-		fmt.Print("Choose an option (1-7): ")
+		log.Info().Msg("\n==============================================")
+		log.Info().Msg("  MAIN MENU")
+		log.Info().Msg("==============================================")
+		log.Info().Msg("1. Create a new circuit")
+		log.Info().Msg("2. Create a new stream")
+		log.Info().Msg("3. Send a message")
+		log.Info().Msg("4. Close a stream")
+		log.Info().Msg("5. Close a circuit")
+		log.Info().Msg("6. Show status")
+		log.Info().Msg("7. Exit")
+		log.Info().Msg("==============================================")
+		log.Info().Msg("Choose an option (1-7): ")
 
 		input, _ := reader.ReadString('\n')
 		input = strings.TrimSpace(input)
@@ -252,16 +250,16 @@ func runInteractiveMenu() {
 		case "7":
 			return
 		default:
-			fmt.Println("Invalid option. Please choose 1-7.")
+			log.Info().Msg("Invalid option. Please choose 1-7.")
 		}
 	}
 }
 
 func handleCreateCircuit() {
-	fmt.Println("\n--- CREATE NEW CIRCUIT ---")
+	log.Info().Msg("\n--- CREATE NEW CIRCUIT ---")
 
 	if len(nodes) < 4 {
-		fmt.Println("Need at least 4 nodes")
+		log.Info().Msg("Need at least 4 nodes")
 		return
 	}
 
@@ -284,62 +282,62 @@ func handleCreateCircuit() {
 		nodeAddrs[relayIndices[2]],
 	}
 
-	fmt.Printf("  Client: Node 1 (%s)\n", nodeAddrs[clientIdx])
-	fmt.Printf("  Guard:  Node %d (%s)\n", relayIndices[0]+1, hops[0])
-	fmt.Printf("  Middle: Node %d (%s)\n", relayIndices[1]+1, hops[1])
-	fmt.Printf("  Exit:   Node %d (%s)\n", relayIndices[2]+1, hops[2])
+	log.Info().Msgf("  Client: Node 1 (%s)", nodeAddrs[clientIdx])
+	log.Info().Msgf("  Guard:  Node %d (%s)", relayIndices[0]+1, hops[0])
+	log.Info().Msgf("  Middle: Node %d (%s)", relayIndices[1]+1, hops[1])
+	log.Info().Msgf("  Exit:   Node %d (%s)", relayIndices[2]+1, hops[2])
 
-	fmt.Println("\nBuilding circuit...")
+	log.Info().Msg("\nBuilding circuit...")
 	circID, err := client.BuildCircuit(hops, 10*time.Second)
 	if err != nil {
-		fmt.Printf("Failed to build circuit: %v\n", err)
+		log.Error().Msgf("Failed to build circuit: %v", err)
 		return
 	}
 
 	circuits[nextCircID] = circID
-	fmt.Printf("Circuit #%d created successfully! (Internal ID: %d)\n", nextCircID, circID)
+	log.Info().Msgf("Circuit #%d created successfully! (Internal ID: %d)", nextCircID, circID)
 	nextCircID++
 
 	time.Sleep(200 * time.Millisecond)
 }
 
 func handleCreateStream() {
-	fmt.Println("\n--- CREATE NEW STREAM ---")
+	log.Info().Msg("\n--- CREATE NEW STREAM ---")
 
 	if len(circuits) == 0 {
-		fmt.Println("No circuits available. Create a circuit first.")
+		log.Info().Msg("No circuits available. Create a circuit first.")
 		return
 	}
 
-	fmt.Println("\nAvailable circuits:")
+	log.Info().Msg("\nAvailable circuits:")
 	for userID, circID := range circuits {
-		fmt.Printf("\tCircuit #%d (Internal ID: %d)\n", userID, circID)
+		log.Info().Msgf("\tCircuit #%d (Internal ID: %d)", userID, circID)
 	}
 
-	fmt.Print("\nEnter circuit number to use: ")
+	log.Info().Msg("\nEnter circuit number to use: ")
 	input, _ := reader.ReadString('\n')
 	input = strings.TrimSpace(input)
 	userCircID, err := strconv.Atoi(input)
 	if err != nil {
-		fmt.Println("Invalid circuit number")
+		log.Info().Msg("Invalid circuit number")
 		return
 	}
 
 	circID, exists := circuits[userCircID]
 	if !exists {
-		fmt.Println("Circuit not found")
+		log.Info().Msg("Circuit not found")
 		return
 	}
 
-	fmt.Print("Enter target address (e.g., service:8080): ")
+	log.Info().Msg("Enter target address (e.g., service:8080): ")
 	targetAddr, _ := reader.ReadString('\n')
 	targetAddr = strings.TrimSpace(targetAddr)
 
-	fmt.Printf("\nOpening stream to %s...\n", targetAddr)
+	log.Info().Msgf("\nOpening stream to %s...", targetAddr)
 	client := nodes[0] // Always use first node as client
 	streamID, err := client.OpenStream(circID, targetAddr)
 	if err != nil {
-		fmt.Printf("Failed to open stream: %v\n", err)
+		log.Error().Msgf("Failed to open stream: %v", err)
 		return
 	}
 
@@ -349,7 +347,7 @@ func handleCreateStream() {
 		userCircID: userCircID,
 	}
 
-	fmt.Printf("Stream #%d created successfully! (Internal ID: %d, Circuit: #%d)\n",
+	log.Info().Msgf("Stream #%d created successfully! (Internal ID: %d, Circuit: #%d)",
 		nextStrID, streamID, userCircID)
 	nextStrID++
 
@@ -357,134 +355,134 @@ func handleCreateStream() {
 }
 
 func handleSendMessage() {
-	fmt.Println("\n--- SEND MESSAGE ---")
+	log.Info().Msg("\n--- SEND MESSAGE ---")
 
 	if len(streams) == 0 {
-		fmt.Println("No streams available. Create a stream first.")
+		log.Info().Msg("No streams available. Create a stream first.")
 		return
 	}
 
-	fmt.Println("\nAvailable streams:")
+	log.Info().Msg("\nAvailable streams:")
 	for userID, info := range streams {
-		fmt.Printf("\tStream #%d (Circuit #%d, Internal Stream ID: %d)\n",
+		log.Info().Msgf("\tStream #%d (Circuit #%d, Internal Stream ID: %d)",
 			userID, info.userCircID, info.streamID)
 	}
 
-	fmt.Print("\nEnter stream number to use: ")
+	log.Info().Msg("\nEnter stream number to use: ")
 	input, _ := reader.ReadString('\n')
 	input = strings.TrimSpace(input)
 	userStrID, err := strconv.Atoi(input)
 	if err != nil {
-		fmt.Println("Invalid stream number")
+		log.Info().Msg("Invalid stream number")
 		return
 	}
 
 	info, exists := streams[userStrID]
 	if !exists {
-		fmt.Println("Stream not found")
+		log.Info().Msg("Stream not found")
 		return
 	}
 
-	fmt.Print("\nEnter message to send: ")
+	log.Info().Msg("\nEnter message to send: ")
 	message, _ := reader.ReadString('\n')
 	message = strings.TrimSpace(message)
 
 	if message == "" {
-		fmt.Println("Empty message")
+		log.Info().Msg("Empty message")
 		return
 	}
 
-	fmt.Printf("\nSending message through stream #%d...\n", userStrID)
+	log.Info().Msgf("\nSending message through stream #%d...", userStrID)
 	client := nodes[0]
 	err = client.SendStreamData(info.circuitID, info.streamID, []byte(message))
 	if err != nil {
-		fmt.Printf("Failed to send message: %v\n", err)
+		log.Error().Msgf("Failed to send message: %v", err)
 		return
 	}
 
-	fmt.Println("Message sent successfully!")
+	log.Info().Msg("Message sent successfully!")
 	time.Sleep(300 * time.Millisecond)
 
-	fmt.Println("\nChecking for response from exit node...")
+	log.Info().Msg("\nChecking for response from exit node...")
 	receivedPackets, err := client.GetReceivedStreamPackets(info.circuitID, info.streamID)
 	if err == nil && len(receivedPackets) > 0 {
-		fmt.Println("Received responses:")
+		log.Info().Msg("Received responses:")
 		for i, packet := range receivedPackets {
-			fmt.Printf("\tResponse %d: %s\n", i+1, string(packet))
+			log.Info().Msgf("\tResponse %d: %s", i+1, string(packet))
 		}
 	} else {
-		fmt.Println("No response received!")
+		log.Info().Msg("No response received!")
 	}
 }
 
 func handleCloseStream() {
-	fmt.Println("\n--- CLOSE STREAM ---")
+	log.Info().Msg("\n--- CLOSE STREAM ---")
 
 	if len(streams) == 0 {
-		fmt.Println("No streams available")
+		log.Info().Msg("No streams available")
 		return
 	}
 
-	fmt.Println("\nAvailable streams:")
+	log.Info().Msg("\nAvailable streams:")
 	for userID, info := range streams {
-		fmt.Printf("\tStream #%d (Circuit #%d, Internal Stream ID: %d)\n",
+		log.Info().Msgf("\tStream #%d (Circuit #%d, Internal Stream ID: %d)",
 			userID, info.userCircID, info.streamID)
 	}
 
-	fmt.Print("\nEnter stream number to close: ")
+	log.Info().Msg("\nEnter stream number to close: ")
 	input, _ := reader.ReadString('\n')
 	input = strings.TrimSpace(input)
 	userStrID, err := strconv.Atoi(input)
 	if err != nil {
-		fmt.Println("Invalid stream number")
+		log.Info().Msg("Invalid stream number")
 		return
 	}
 
 	info, exists := streams[userStrID]
 	if !exists {
-		fmt.Println("Stream not found")
+		log.Info().Msg("Stream not found")
 		return
 	}
 
-	fmt.Printf("\nClosing stream #%d...\n", userStrID)
+	log.Info().Msgf("\nClosing stream #%d...", userStrID)
 	client := nodes[0]
 	err = client.CloseStream(info.circuitID, info.streamID)
 	if err != nil {
-		fmt.Printf("Failed to close stream: %v\n", err)
+		log.Error().Msgf("Failed to close stream: %v", err)
 		return
 	}
 
 	delete(streams, userStrID)
-	fmt.Printf("Stream #%d closed successfully!\n", userStrID)
+	log.Info().Msgf("Stream #%d closed successfully!", userStrID)
 
 	time.Sleep(200 * time.Millisecond)
 }
 
 func handleCloseCircuit() {
-	fmt.Println("\n--- CLOSE CIRCUIT ---")
+	log.Info().Msg("\n--- CLOSE CIRCUIT ---")
 
 	if len(circuits) == 0 {
-		fmt.Println("No circuits available")
+		log.Info().Msg("No circuits available")
 		return
 	}
 
-	fmt.Println("\nAvailable circuits:")
+	log.Info().Msg("\nAvailable circuits:")
 	for userID, circID := range circuits {
-		fmt.Printf("\tCircuit #%d (Internal ID: %d)\n", userID, circID)
+		log.Info().Msgf("\tCircuit #%d (Internal ID: %d)", userID, circID)
 	}
 
-	fmt.Print("\nEnter circuit number to close: ")
+	log.Info().Msg("\nEnter circuit number to close: ")
 	input, _ := reader.ReadString('\n')
 	input = strings.TrimSpace(input)
 	userCircID, err := strconv.Atoi(input)
 	if err != nil {
-		fmt.Println("Invalid circuit number")
+		log.Info().Msg("Invalid circuit number")
 		return
 	}
 
 	circID, exists := circuits[userCircID]
 	if !exists {
-		fmt.Println("Circuit not found")
+		log.Info().Msg("Circuit not found")
 		return
 	}
 
@@ -497,8 +495,8 @@ func handleCloseCircuit() {
 	}
 
 	if len(streamsOnCircuit) > 0 {
-		fmt.Printf("Warning: Circuit #%d has %d open stream(s)\n", userCircID, len(streamsOnCircuit))
-		fmt.Print("Close them first? (y/n): ")
+		log.Warn().Msgf("Warning: Circuit #%d has %d open stream(s)", userCircID, len(streamsOnCircuit))
+		log.Info().Msg("Close them first? (y/n): ")
 		confirm, _ := reader.ReadString('\n')
 		confirm = strings.TrimSpace(strings.ToLower(confirm))
 
@@ -506,45 +504,49 @@ func handleCloseCircuit() {
 			for _, strID := range streamsOnCircuit {
 				info := streams[strID]
 				client := nodes[0]
-				client.CloseStream(info.circuitID, info.streamID)
+				err := client.CloseStream(info.circuitID, info.streamID)
+				if err != nil {
+					log.Error().Msgf("Failed to close stream #%d: %v", strID, err)
+				} else {
+					log.Info().Msgf("  ✓ Closed stream #%d", strID)
+				}
 				delete(streams, strID)
-				fmt.Printf("  ✓ Closed stream #%d\n", strID)
 			}
 			time.Sleep(200 * time.Millisecond)
 		}
 	}
 
-	fmt.Printf("\nDestroying circuit #%d...\n", userCircID)
+	log.Info().Msgf("\nDestroying circuit #%d...", userCircID)
 	client := nodes[0]
 	err = client.DestroyCircuit(circID)
 	if err != nil {
-		fmt.Printf("Failed to destroy circuit: %v\n", err)
+		log.Error().Msgf("Failed to destroy circuit: %v", err)
 		return
 	}
 
 	delete(circuits, userCircID)
-	fmt.Printf("Circuit #%d destroyed successfully!\n", userCircID)
+	log.Info().Msgf("Circuit #%d destroyed successfully!", userCircID)
 
 	time.Sleep(200 * time.Millisecond)
 }
 
 func handleShowStatus() {
-	fmt.Println("\n--- SYSTEM STATUS ---")
-	fmt.Printf("Total nodes: %d\n", len(nodes))
-	fmt.Printf("Active circuits: %d\n", len(circuits))
-	fmt.Printf("Active streams: %d\n", len(streams))
+	log.Info().Msg("\n--- SYSTEM STATUS ---")
+	log.Info().Msgf("Total nodes: %d", len(nodes))
+	log.Info().Msgf("Active circuits: %d", len(circuits))
+	log.Info().Msgf("Active streams: %d", len(streams))
 
 	if len(circuits) > 0 {
-		fmt.Println("\nCircuits:")
+		log.Info().Msg("\nCircuits:")
 		for userID, circID := range circuits {
-			fmt.Printf("\tCircuit #%d (Internal ID: %d)\n", userID, circID)
+			log.Info().Msgf("\tCircuit #%d (Internal ID: %d)", userID, circID)
 		}
 	}
 
 	if len(streams) > 0 {
-		fmt.Println("\nStreams:")
+		log.Info().Msg("\nStreams:")
 		for userID, info := range streams {
-			fmt.Printf("\tStream #%d (Circuit #%d, Internal Stream ID: %d)\n",
+			log.Info().Msgf("\tStream #%d (Circuit #%d, Internal Stream ID: %d)",
 				userID, info.userCircID, info.streamID)
 		}
 	}
@@ -554,7 +556,7 @@ func cleanupNodes() {
 	for i, node := range nodes {
 		err := node.Stop()
 		if err != nil {
-			fmt.Printf("Warning: Failed to stop node %d: %v\n", i+1, err)
+			log.Warn().Msgf("Warning: Failed to stop node %d: %v", i+1, err)
 		}
 	}
 }
