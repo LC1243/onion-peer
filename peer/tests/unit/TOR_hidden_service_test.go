@@ -1,6 +1,7 @@
 package unit
 
 import (
+	"crypto/x509"
 	"testing"
 	"time"
 
@@ -196,12 +197,12 @@ func Test_TOR_HS_Descriptor_Expired(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	ok, _ := client.Peer.LookupDescriptor(circID, serviceID, time.Second)
+	ok, _, _ := client.Peer.LookupDescriptor(circID, serviceID, time.Second)
 	require.True(t, ok)
 
 	time.Sleep(2 * time.Second)
 
-	ok, _ = client.Peer.LookupDescriptor(circID, serviceID, time.Second)
+	ok, _, _ = client.Peer.LookupDescriptor(circID, serviceID, time.Second)
 	require.False(t, ok)
 
 }
@@ -267,7 +268,7 @@ func Test_TOR_HS_Descriptor_Publish_AndLookup(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	ok, found := lookupClient.Peer.LookupDescriptor(
+	ok, found, _ := lookupClient.Peer.LookupDescriptor(
 		lookupCircID,
 		serviceID,
 		time.Second,
@@ -348,7 +349,7 @@ func Test_TOR_HS_Create_HiddenService_Basic(t *testing.T) {
 	require.Equal(t, 1, exit.Peer.GetIntroPointStateCount(serviceID))
 
 	// Descriptor published and retrievable via HSDir
-	ok, introORs := client.Peer.LookupDescriptor(
+	ok, introORs, _ := client.Peer.LookupDescriptor(
 		introCircID, // reuse circuit to HSDir
 		serviceID,
 		time.Second,
@@ -454,7 +455,7 @@ func Test_TOR_HS_Create_HiddenService_MultipleIntroPoints(t *testing.T) {
 		)
 		require.NoError(t, err)
 
-		ok, found := lc.Peer.LookupDescriptor(
+		ok, found, _ := lc.Peer.LookupDescriptor(
 			circID,
 			serviceID,
 			time.Second,
@@ -538,7 +539,7 @@ func Test_TOR_HS_Delete_HiddenService_Basic(t *testing.T) {
 	require.Equal(t, []uint16{introCircID}, client.Peer.GetCircuitIDs())
 
 	// Descriptor should not be available via HSDir
-	ok, introORs := client.Peer.LookupDescriptor(
+	ok, introORs, _ := client.Peer.LookupDescriptor(
 		introCircID, // reuse circuit to HSDir
 		serviceID,
 		time.Second,
@@ -623,7 +624,7 @@ func Test_TOR_HS_Delete_HiddenService_MultipleIntroPoints(t *testing.T) {
 	require.Equal(t, []uint16{introCircID}, client.Peer.GetCircuitIDs())
 
 	// Descriptor should not be available via HSDir
-	ok, introORs := client.Peer.LookupDescriptor(
+	ok, introORs, _ := client.Peer.LookupDescriptor(
 		introCircID, // reuse circuit to HSDir
 		serviceID,
 		time.Second,
@@ -713,7 +714,7 @@ func Test_TOR_HS_Descriptor_Fragmentation(t *testing.T) {
 	clientInsBefore := len(client.GetIns())
 	hsdirOutsBefore := len(hsDir.GetOuts())
 	// Lookup descriptor
-	ok, found := client.Peer.LookupDescriptor(
+	ok, found, _ := client.Peer.LookupDescriptor(
 		circID,
 		serviceID,
 		time.Second,
@@ -823,6 +824,371 @@ func Test_TO_HS_EncodeDecodeIPIntroductionMessage_Succeeds(t *testing.T) {
 
 	require.Equal(t, msg.ServiceID, decoded.ServiceID, "Service IDs should match")
 	require.Equal(t, msg.EncryptedBlob, decoded.EncryptedBlob, "Encrypted blobs should match")
+}
+
+// Test_TOR_HS_IntroduceToHiddenService_NoSuchService_Fails tests introducing to a non-existent hidden service
+func Test_TOR_HS_IntroduceToHiddenService_NoIntroPoints_Fails(t *testing.T) {
+	transp := channelFac()
+
+	// Create introduction point circuit nodes
+	client := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer client.Stop()
+	IPGuard := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer IPGuard.Stop()
+	IPMiddle := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer IPMiddle.Stop()
+	IP := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer IP.Stop()
+
+	// Create rendezvous point circuit nodes
+	RPGuard := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer RPGuard.Stop()
+	RPMiddle := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer RPMiddle.Stop()
+	RP := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer RP.Stop()
+
+	// Set up the nodes
+	nodes := []z.TestNode{client, IPGuard, IPMiddle, IP, RPGuard, RPMiddle, RP}
+	for i, n1 := range nodes {
+		for j, n2 := range nodes {
+			if i != j {
+				n1.AddPeer(n2.GetAddr())
+			}
+		}
+	}
+	time.Sleep(100 * time.Millisecond)
+	z.PopulateOnionKeys(nodes)
+
+	RPCircID, err := client.Peer.BuildCircuit(
+		[3]string{RPGuard.GetAddr(), RPMiddle.GetAddr(), RP.GetAddr()},
+		5*time.Second,
+	)
+	require.NoError(t, err)
+	IPCircID, err := client.Peer.BuildCircuit(
+		[3]string{IPGuard.GetAddr(), IPMiddle.GetAddr(), IP.GetAddr()},
+		5*time.Second,
+	)
+	require.NoError(t, err)
+
+	// Get cookie and set up RP
+	cookie, err := client.Peer.PrepareRendezvousPoint(RPCircID, 2*time.Second)
+	require.NoError(t, err)
+
+	// Create a fake service ID
+	serviceID := "42"
+	keyPair, err := impl.GenerateServiceKeyPair()
+	require.NoError(t, err)
+	servicePubKey := x509.MarshalPKCS1PublicKey(keyPair.Public)
+
+	// The introduction should send a false Introduce ACK back since it do not contain any intro points info
+	err = client.Peer.IntroduceToHiddenService(IPCircID, serviceID, servicePubKey, cookie, RP.GetAddr(), time.Second)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "introduction failed according to ACK")
+}
+
+// Test_TOR_HS_IntroduceToHiddenService_Succeeds tests that a client introducing to an existing hidden service
+// with available intro points succeeds. It covers the full flow of creating the hidden service, publishing its
+// descriptor, looking up the descriptor from the client, and performing the introduction but does not cover
+// the rendezvous establishment.
+func Test_TOR_HS_IntroduceToHiddenService_Succeeds(t *testing.T) {
+	transp := channelFac()
+
+	// Hidden service <-> HSDir circuit nodes
+	service := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer service.Stop()
+	serviceHSDirGuard := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer serviceHSDirGuard.Stop()
+	serviceHSDirMiddle := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer serviceHSDirMiddle.Stop()
+	HSDir := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer HSDir.Stop()
+	HSDir.Peer.SetPeerAsHSDir(true)
+
+	// Client <-> HSDir circuit nodes
+	client := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer client.Stop()
+	clientHSDirGuard := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer clientHSDirGuard.Stop()
+	clientHSDirMiddle := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer clientHSDirMiddle.Stop()
+
+	// Client <-> Rendezvous Point circuit nodes
+	clientRPGuard := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer clientRPGuard.Stop()
+	clientRPMiddle := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer clientRPMiddle.Stop()
+	RP := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer RP.Stop()
+
+	// Hidden service <-> Intro Point circuit nodes
+	serviceIntroGuard := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer serviceIntroGuard.Stop()
+	serviceIntroMiddle := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer serviceIntroMiddle.Stop()
+	IntroPoint := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer IntroPoint.Stop()
+
+	// Client <-> Intro Point circuit nodes
+	clientIntroGuard := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer clientIntroGuard.Stop()
+	clientIntroMiddle := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer clientIntroMiddle.Stop()
+
+	// Set up the nodes
+	nodes := []z.TestNode{
+		client, service,
+		HSDir, serviceHSDirGuard, serviceHSDirMiddle, clientHSDirGuard, clientHSDirMiddle,
+		IntroPoint, serviceIntroGuard, serviceIntroMiddle, clientIntroGuard, clientIntroMiddle,
+		RP, clientRPGuard, clientRPMiddle,
+	}
+	for i, n1 := range nodes {
+		for j, n2 := range nodes {
+			if i != j {
+				n1.AddPeer(n2.GetAddr())
+			}
+		}
+	}
+	time.Sleep(1 * time.Second)
+	z.PopulateOnionKeys(nodes)
+
+	// Create the circuits
+	serviceHSDirCircID, err := service.Peer.BuildCircuit(
+		[3]string{serviceHSDirGuard.GetAddr(), serviceHSDirMiddle.GetAddr(), HSDir.GetAddr()},
+		5*time.Second,
+	)
+	require.NoError(t, err)
+
+	clientHSDirCircID, err := client.Peer.BuildCircuit(
+		[3]string{clientHSDirGuard.GetAddr(), clientHSDirMiddle.GetAddr(), HSDir.GetAddr()},
+		5*time.Second,
+	)
+	require.NoError(t, err)
+
+	clientIntroCircID, err := client.Peer.BuildCircuit(
+		[3]string{clientIntroGuard.GetAddr(), clientIntroMiddle.GetAddr(), IntroPoint.GetAddr()},
+		5*time.Second,
+	)
+	require.NoError(t, err)
+
+	clientRPCircID, err := client.Peer.BuildCircuit(
+		[3]string{clientRPGuard.GetAddr(), clientRPMiddle.GetAddr(), RP.GetAddr()},
+		5*time.Second,
+	)
+	require.NoError(t, err)
+
+	// Create the hidden service with one intro point and publish its descriptor
+	introHops := [][3]string{
+		{serviceIntroGuard.GetAddr(), serviceIntroMiddle.GetAddr(), IntroPoint.GetAddr()},
+	}
+
+	serviceID, serverIntroCircID, err := service.Peer.CreateHiddenService(
+		introHops,
+		5*time.Second,
+		time.Minute,
+		serviceHSDirCircID,
+	)
+	require.NoError(t, err)
+	require.NotEmpty(t, serviceID)
+	require.Len(t, serverIntroCircID, 1)
+
+	// Service local intro point recorded
+	intros := service.Peer.GetServiceIntroPoints(serviceID)
+	require.Len(t, intros, 1)
+	require.Equal(t, IntroPoint.GetAddr(), intros[0])
+
+	// Intro point store the intro state
+	require.Equal(t, 1, IntroPoint.Peer.GetIntroPointStateCount(serviceID))
+
+	// Descriptor published and retrievable from client via HSDir
+	ok, introORs, servicePubKey := client.Peer.LookupDescriptor(
+		clientHSDirCircID,
+		serviceID,
+		time.Second,
+	)
+	require.True(t, ok)
+	require.Len(t, introORs, 1)
+	require.Equal(t, IntroPoint.GetAddr(), introORs[0])
+
+	// Prepare rendezvous point
+	cookie, err := client.Peer.PrepareRendezvousPoint(clientRPCircID, 2*time.Second)
+	require.NoError(t, err)
+
+	// Check initial packet counts
+	clientSentBefore := len(client.GetOuts())
+	clientReceivedBefore := len(client.GetOuts())
+	introRecvBefore := len(IntroPoint.GetIns())
+	introSentBefore := len(IntroPoint.GetOuts())
+
+	// Introduce to hidden service
+	err = client.Peer.IntroduceToHiddenService(clientIntroCircID, serviceID, servicePubKey,
+		cookie, "rendezvous.example.onion:1234", time.Second)
+	require.NoError(t, err)
+
+	// Check packet counts after
+	clientSentAfter := len(client.GetOuts())
+	clientReceivedAfter := len(client.GetOuts())
+	introRecvAfter := len(IntroPoint.GetIns())
+	introSentAfter := len(IntroPoint.GetOuts())
+
+	require.Equal(t, clientSentAfter-clientSentBefore, 1, "Client should have sent 1 packet")
+	require.Equal(t, clientReceivedAfter-clientReceivedBefore, 1,
+		"Client should have received 1 packet")
+	require.Equal(t, introRecvAfter-introRecvBefore, 1, "Intro point should have received 1 packet")
+	require.Equal(t, introSentAfter-introSentBefore, 2, "Intro point should have sent 2 packets")
+}
+
+// Test_TOR_HS_IntroduceToHiddenService_SmallTimeout_Fails tests that introducing to a hidden service
+// with a too small timeout fails.
+func Test_TOR_HS_IntroduceToHiddenService_SmallTimeout_Fails(t *testing.T) {
+	transp := channelFac()
+
+	// Hidden service <-> HSDir circuit nodes
+	service := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer service.Stop()
+	serviceHSDirGuard := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer serviceHSDirGuard.Stop()
+	serviceHSDirMiddle := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer serviceHSDirMiddle.Stop()
+	HSDir := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer HSDir.Stop()
+	HSDir.Peer.SetPeerAsHSDir(true)
+
+	// Client <-> HSDir circuit nodes
+	client := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer client.Stop()
+	clientHSDirGuard := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer clientHSDirGuard.Stop()
+	clientHSDirMiddle := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer clientHSDirMiddle.Stop()
+
+	// Client <-> Rendezvous Point circuit nodes
+	clientRPGuard := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer clientRPGuard.Stop()
+	clientRPMiddle := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer clientRPMiddle.Stop()
+	RP := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer RP.Stop()
+
+	// Hidden service <-> Intro Point circuit nodes
+	serviceIntroGuard := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer serviceIntroGuard.Stop()
+	serviceIntroMiddle := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer serviceIntroMiddle.Stop()
+	IntroPoint := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer IntroPoint.Stop()
+
+	// Client <-> Intro Point circuit nodes
+	clientIntroGuard := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer clientIntroGuard.Stop()
+	clientIntroMiddle := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer clientIntroMiddle.Stop()
+
+	// Set up the nodes
+	nodes := []z.TestNode{
+		client, service,
+		HSDir, serviceHSDirGuard, serviceHSDirMiddle, clientHSDirGuard, clientHSDirMiddle,
+		IntroPoint, serviceIntroGuard, serviceIntroMiddle, clientIntroGuard, clientIntroMiddle,
+		RP, clientRPGuard, clientRPMiddle,
+	}
+	for i, n1 := range nodes {
+		for j, n2 := range nodes {
+			if i != j {
+				n1.AddPeer(n2.GetAddr())
+			}
+		}
+	}
+	time.Sleep(1 * time.Second)
+	z.PopulateOnionKeys(nodes)
+
+	// Create the circuits
+	serviceHSDirCircID, err := service.Peer.BuildCircuit(
+		[3]string{serviceHSDirGuard.GetAddr(), serviceHSDirMiddle.GetAddr(), HSDir.GetAddr()},
+		5*time.Second,
+	)
+	require.NoError(t, err)
+
+	clientHSDirCircID, err := client.Peer.BuildCircuit(
+		[3]string{clientHSDirGuard.GetAddr(), clientHSDirMiddle.GetAddr(), HSDir.GetAddr()},
+		5*time.Second,
+	)
+	require.NoError(t, err)
+
+	clientIntroCircID, err := client.Peer.BuildCircuit(
+		[3]string{clientIntroGuard.GetAddr(), clientIntroMiddle.GetAddr(), IntroPoint.GetAddr()},
+		5*time.Second,
+	)
+	require.NoError(t, err)
+
+	clientRPCircID, err := client.Peer.BuildCircuit(
+		[3]string{clientRPGuard.GetAddr(), clientRPMiddle.GetAddr(), RP.GetAddr()},
+		5*time.Second,
+	)
+	require.NoError(t, err)
+
+	// Create the hidden service with one intro point and publish its descriptor
+	introHops := [][3]string{
+		{serviceIntroGuard.GetAddr(), serviceIntroMiddle.GetAddr(), IntroPoint.GetAddr()},
+	}
+
+	serviceID, serverIntroCircID, err := service.Peer.CreateHiddenService(
+		introHops,
+		5*time.Second,
+		time.Minute,
+		serviceHSDirCircID,
+	)
+	require.NoError(t, err)
+	require.NotEmpty(t, serviceID)
+	require.Len(t, serverIntroCircID, 1)
+
+	// Service local intro point recorded
+	intros := service.Peer.GetServiceIntroPoints(serviceID)
+	require.Len(t, intros, 1)
+	require.Equal(t, IntroPoint.GetAddr(), intros[0])
+
+	// Intro point store the intro state
+	require.Equal(t, 1, IntroPoint.Peer.GetIntroPointStateCount(serviceID))
+
+	// Descriptor published and retrievable from client via HSDir
+	ok, introORs, servicePubKey := client.Peer.LookupDescriptor(
+		clientHSDirCircID,
+		serviceID,
+		time.Second,
+	)
+	require.True(t, ok)
+	require.Len(t, introORs, 1)
+	require.Equal(t, IntroPoint.GetAddr(), introORs[0])
+
+	// Prepare rendezvous point
+	cookie, err := client.Peer.PrepareRendezvousPoint(clientRPCircID, 2*time.Second)
+	require.NoError(t, err)
+
+	// Check initial packet counts
+	clientSentBefore := len(client.GetOuts())
+	clientReceivedBefore := len(client.GetOuts())
+	introRecvBefore := len(IntroPoint.GetIns())
+	introSentBefore := len(IntroPoint.GetOuts())
+
+	// Introduce to hidden service
+	err = client.Peer.IntroduceToHiddenService(clientIntroCircID, serviceID, servicePubKey,
+		cookie, "rendezvous.example.onion:1234", time.Nanosecond) // too small timeout
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "timed out")
+
+	time.Sleep(200 * time.Millisecond) // Give time for any async operations
+
+	// Check packet counts after
+	clientSentAfter := len(client.GetOuts())
+	clientReceivedAfter := len(client.GetOuts())
+	introRecvAfter := len(IntroPoint.GetIns())
+	introSentAfter := len(IntroPoint.GetOuts())
+
+	// Intro point still should have received the introduction and sent the ACK and intro2 messages
+	require.Equal(t, clientSentAfter-clientSentBefore, 1, "Client should have sent 1 packet")
+	require.Equal(t, clientReceivedAfter-clientReceivedBefore, 1,
+		"Client should have received 1 (after the timeout)")
+	require.Equal(t, introRecvAfter-introRecvBefore, 1, "Intro point should have received 1 packet")
+	require.Equal(t, introSentAfter-introSentBefore, 2, "Intro point should have sent 2 packets")
 }
 
 // Test_TOR_HS_Rendezvous_FullHandshake_Succeeds tests the full rendezvous handshake:

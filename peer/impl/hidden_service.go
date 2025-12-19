@@ -861,7 +861,7 @@ func (n *node) LookupDescriptorViaHSDir(circID uint16, serviceID string, timeout
 }
 
 // LookupDescriptor implements peer.TorHiddenServices
-func (n *node) LookupDescriptor(circID uint16, serviceID string, timeout time.Duration) (bool, []string) {
+func (n *node) LookupDescriptor(circID uint16, serviceID string, timeout time.Duration) (bool, []string, []byte) {
 	n.log.Info().
 		Str("serviceID", serviceID).
 		Uint16("circID", circID).
@@ -869,7 +869,7 @@ func (n *node) LookupDescriptor(circID uint16, serviceID string, timeout time.Du
 
 	descriptor, err := n.LookupDescriptorViaHSDir(circID, serviceID, timeout)
 	if err != nil {
-		return false, nil
+		return false, nil, []byte{}
 	}
 
 	// not found or expired
@@ -877,14 +877,14 @@ func (n *node) LookupDescriptor(circID uint16, serviceID string, timeout time.Du
 		n.log.Info().
 			Str("serviceID", serviceID).
 			Msg("Client lookup: descriptor not found or expired")
-		return false, nil
+		return false, nil, []byte{}
 	}
 
 	n.log.Info().
 		Str("serviceID", serviceID).
 		Int("introPoints", len(descriptor.IntroPoints)).
 		Msg("Client lookup: descriptor received")
-	return true, descriptor.IntroPoints
+	return true, descriptor.IntroPoints, descriptor.ServicePubKey
 }
 
 // HandleRelayHSDirReply handles relay cells sent by the HSDir to reply to a lookup or publish request
