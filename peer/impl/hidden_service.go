@@ -2040,11 +2040,10 @@ func (n *node) SendRelayRendezvous1(circID uint16,
 		Str("rpAddr", rendezvousAddr).
 		Msg("Building circuit to rendezvous point")
 
-	rpCircID, err := n.BuildCircuit([3]string{
-		middleHops[0],
-		middleHops[1],
-		rendezvousAddr,
-	}, 5*time.Second)
+	hops := make([]string, 0, len(middleHops)+1)
+	hops = append(hops, middleHops...)
+	hops = append(hops, rendezvousAddr)
+	rpCircID, err := n.BuildCircuit(hops, 5*time.Second)
 
 	if err != nil {
 		return fmt.Errorf("failed to build circuit to RP: %w", err)
