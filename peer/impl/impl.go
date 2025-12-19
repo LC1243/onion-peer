@@ -32,6 +32,8 @@ func NewPeer(conf peer.Configuration) peer.Peer {
 	level := zerolog.InfoLevel
 	if os.Getenv("GLOG") == "no" {
 		level = zerolog.Disabled
+	} else if os.Getenv("GLOG") == "trace" {
+		level = zerolog.TraceLevel
 	}
 	writer := zerolog.ConsoleWriter{Out: os.Stdout, TimeFormat: time.RFC3339}
 	n.log = zerolog.New(writer).Level(level).With().Timestamp().Logger().
@@ -56,6 +58,9 @@ func NewPeer(conf peer.Configuration) peer.Peer {
 	// Initialize rate limiting token buckets
 	n.writeBucket = NewTokenBucket(DefaultRate, DefaultCapacity)
 	n.readBucket = NewTokenBucket(DefaultRate, DefaultCapacity)
+
+	// Initialize scheduler
+	n.scheduler = NewCircuitScheduler(n)
 
 	// Initialize crypto state
 	n.peerOnionKeys = make(map[string]*rsa.PublicKey)
@@ -189,6 +194,9 @@ type node struct {
 	readBucket  *TokenBucket // Token bucket for incoming data
 	packetCh    chan transport.Packet
 
+	// Fairness Scheduler
+	scheduler *CircuitScheduler
+
 	serviceKeys     map[string]*OnionKeyPair
 	hiddenServices  map[string]*HiddenService
 	hiddenServiceMu sync.RWMutex
@@ -226,8 +234,8 @@ type node struct {
 
 	// Security statistics for profiling and testing
 	SecurityStats SecurityStats
-	hsdirFragMu sync.Mutex
-	hsdirFrags  map[fragKey]*fragBuf // MsgID -> buffer
+	hsdirFragMu   sync.Mutex
+	hsdirFrags    map[fragKey]*fragBuf // MsgID -> buffer
 }
 
 // Start implements peer.Service
@@ -244,6 +252,9 @@ func (n *node) Start() error {
 	// Launch the listening loop in a background goroutine so Start returns quickly.
 	n.wg.Add(1)
 	go n.listenLoop()
+
+	// Start scheduler
+	n.scheduler.Start()
 
 	// Start anti-entropy loop if configured
 	if n.conf.AntiEntropyInterval > 0 {
@@ -344,6 +355,11 @@ func (n *node) Stop() error {
 	case <-n.stopCh: // already closed
 	default:
 		close(n.stopCh)
+	}
+
+	// Stop scheduler
+	if n.scheduler != nil {
+		n.scheduler.Stop()
 	}
 
 	// Wait for background goroutines.
