@@ -1986,9 +1986,7 @@ func (n *node) HandleRelayIntroduce2(relay RelayCell) error {
 	}
 	n.cryptoStatesMu.Unlock()
 
-	n.hiddenServiceMu.RLock()
 	introPoints := n.GetServiceIntroPoints(ipIntroMsg.ServiceID)
-	n.hiddenServiceMu.RUnlock()
 
 	go func() {
 		err := n.SendRelayRendezvous1(relay.CircID, serviceIntro.Cookie, serviceIntro.RPAddr, introPoints)
