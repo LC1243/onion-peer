@@ -942,11 +942,18 @@ func Test_TOR_HS_IntroduceToHiddenService_Succeeds(t *testing.T) {
 		IntroPoint, serviceIntroGuard, serviceIntroMiddle, clientIntroGuard, clientIntroMiddle,
 		RP, clientRPGuard, clientRPMiddle,
 	}
-	for i, n1 := range nodes {
-		for j, n2 := range nodes {
-			if i != j {
-				n1.AddPeer(n2.GetAddr())
+	for _, n1 := range nodes {
+		for _, n2 := range nodes {
+
+			if n1 == n2 {
+				continue
 			}
+			// Alice (client) <-> Bob (service) can't be neighbors
+			if (n1 == client && n2 == service) || (n1 == service && n2 == client) {
+				continue
+			}
+
+			n1.AddPeer(n1.GetAddr())
 		}
 	}
 	time.Sleep(1 * time.Second)
@@ -1091,11 +1098,18 @@ func Test_TOR_HS_IntroduceToHiddenService_SmallTimeout_Fails(t *testing.T) {
 		IntroPoint, serviceIntroGuard, serviceIntroMiddle, clientIntroGuard, clientIntroMiddle,
 		RP, clientRPGuard, clientRPMiddle,
 	}
-	for i, n1 := range nodes {
-		for j, n2 := range nodes {
-			if i != j {
-				n1.AddPeer(n2.GetAddr())
+	for _, n1 := range nodes {
+		for _, n2 := range nodes {
+
+			if n1 == n2 {
+				continue
 			}
+			// Alice (client) <-> Bob (service) can't be neighbors
+			if (n1 == client && n2 == service) || (n1 == service && n2 == client) {
+				continue
+			}
+
+			n1.AddPeer(n1.GetAddr())
 		}
 	}
 	time.Sleep(1 * time.Second)
