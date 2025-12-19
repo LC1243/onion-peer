@@ -51,6 +51,7 @@ func NewPeer(conf peer.Configuration) peer.Peer {
 	n.circuits = make(map[circuitKey]*Circuit)
 	n.clientCircuits = make(map[uint16]*ClientCircuit)
 	n.streamTables = make(map[uint16]*CircuitStreams)
+	n.pendingStreams = make(map[uint16]map[uint16]*Stream)
 	n.congestionControl = true
 	// Initialize rate limiting token buckets
 	n.writeBucket = NewTokenBucket(DefaultRate, DefaultCapacity)
@@ -72,6 +73,7 @@ func NewPeer(conf peer.Configuration) peer.Peer {
 	n.rendezvousEntries = make(map[string]uint16) // every node can act as rendezvous point
 	n.introAckCh = make(map[uint16]chan struct{})
 	n.introAckSuccess = make(map[uint16]bool)
+	n.rendezvousStates = make(map[string]*DhRendezvousState)
 
 	// Generate onion keypair for this node
 	// Note: In production, this should be loaded from persistent storage
@@ -161,6 +163,10 @@ type node struct {
 	streamsMu    sync.RWMutex
 	streamTables map[uint16]*CircuitStreams
 
+	// Stores streams waiting for RELAY_CONNECTED
+	pendingStreamsMu sync.RWMutex
+	pendingStreams   map[uint16]map[uint16]*Stream
+
 	// Congestion control toggle
 	congestionControl bool
 
@@ -183,8 +189,9 @@ type node struct {
 	readBucket  *TokenBucket // Token bucket for incoming data
 	packetCh    chan transport.Packet
 
-	serviceKeys    map[string]*OnionKeyPair
-	hiddenServices map[string]*HiddenService
+	serviceKeys     map[string]*OnionKeyPair
+	hiddenServices  map[string]*HiddenService
+	hiddenServiceMu sync.RWMutex
 
 	introPoints   map[string][]*IntroPointState // serviceID -> state
 	introPointsMu sync.RWMutex
@@ -197,6 +204,7 @@ type node struct {
 
 	rendezvousEntryMu sync.Mutex
 	rendezvousEntries map[string]uint16 // cookie -> circID
+	rendezvousStates  map[string]*DhRendezvousState
 
 	introAckMu      sync.Mutex
 	introAckCh      map[uint16]chan struct{} // circID -> done
@@ -211,6 +219,13 @@ type node struct {
 	hsDirMu     sync.RWMutex
 	hsdirWaitMu sync.Mutex
 	hsdirWait   map[uint16]chan *ServiceDescriptor
+
+	// Test hooks for security testing
+	TestCellInterceptor func(*Cell) // Function hook called before sending a cell to potentially modify it
+	TestInterceptorMu   sync.RWMutex
+
+	// Security statistics for profiling and testing
+	SecurityStats SecurityStats
 	hsdirFragMu sync.Mutex
 	hsdirFrags  map[fragKey]*fragBuf // MsgID -> buffer
 }
@@ -540,4 +555,13 @@ func (n *node) CleanupStreams(circID uint16) {
 	n.streamsMu.Lock()
 	delete(n.streamTables, circID)
 	n.streamsMu.Unlock()
+}
+
+// SetTestCellInterceptor sets a test hook for intercepting cells before sending.
+// This is used for security testing (e.g., tampering, corruption tests).
+// Only for testing - not part of the public Peer interface.
+func (n *node) SetTestCellInterceptor(interceptor func(*Cell)) {
+	n.TestInterceptorMu.Lock()
+	n.TestCellInterceptor = interceptor
+	n.TestInterceptorMu.Unlock()
 }

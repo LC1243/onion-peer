@@ -15,6 +15,7 @@ type Peer interface {
 	Tor
 	TorStreams
 	TorHiddenServices
+	TorSecurity
 	TorRendezvous
 	TorClientIntroduction
 }
@@ -129,6 +130,30 @@ type TorHiddenServices interface {
 	SetPeerAsHSDir(value bool)
 }
 
+// Provides methods for security profiling and testing
+type TorSecurity interface {
+	// GetDigestMismatches returns the total number of digest mismatches detected
+	GetDigestMismatches() uint64
+
+	// GetRelayDigestMismatches returns digest mismatches on relay cells (forwarded)
+	GetRelayDigestMismatches() uint64
+
+	// GetDroppedCells returns the total number of cells dropped due to errors
+	GetDroppedCells() uint64
+
+	// GetDroppedDigestMismatch returns cells dropped specifically due to digest mismatch
+	GetDroppedDigestMismatch() uint64
+
+	// GetDroppedNoNextHop returns cells dropped because no next hop available
+	GetDroppedNoNextHop() uint64
+
+	// GetDroppedDecryptionFail returns cells dropped due to decryption failure
+	GetDroppedDecryptionFail() uint64
+
+	// ResetSecurityStats resets all security statistics to zero
+	ResetSecurityStats()
+}
+
 type TorRendezvous interface {
 	// PrepareRendezvousPoint prepares a rendezvous point on the given circID for a given serviceID.
 	// It returns the cookie that the client will send to the hidden service to connect at the RP.
@@ -137,6 +162,12 @@ type TorRendezvous interface {
 
 	// GetRendezvousEntriesCount returns the number of active rendezvous points managed by the peer.
 	GetRendezvousEntriesCount() int
+
+	// GetServicePublicKey returns the public key of the service with the given ID.
+	GetServicePublicKey(serviceID string) []byte
+
+	// GetCircuitCryptoStatesCount returns the number of crypto states for a given circuit.
+	GetCircuitCryptoStatesCount(circID uint16) int
 }
 
 type TorClientIntroduction interface {
