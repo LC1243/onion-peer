@@ -36,7 +36,7 @@ func (n *node) PickRandomRelay(exclude map[string]struct{}) (string, bool) {
 }
 
 // BuildRandomPath builds a random path of hops, useful to choose the middle nodes for a circuit
-func (n *node) BuildRandomPath(hops int, destination string) ([]string, error) {
+func (n *node) BuildRandomPath(hops int, excludes ...string) ([]string, error) {
 	exclude := make(map[string]struct{})
 	path := make([]string, 0, hops)
 
@@ -45,8 +45,12 @@ func (n *node) BuildRandomPath(hops int, destination string) ([]string, error) {
 		exclude[n.conf.Socket.GetAddress()] = struct{}{}
 	}
 
-	// exclude destination
-	exclude[destination] = struct{}{}
+	// exclude destination and other addresses
+	for _, addr := range excludes {
+		if addr != "" {
+			exclude[addr] = struct{}{}
+		}
+	}
 
 	for i := 0; i < hops; i++ {
 		r, ok := n.PickRandomRelay(exclude)

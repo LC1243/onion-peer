@@ -942,11 +942,18 @@ func Test_TOR_HS_IntroduceToHiddenService_Succeeds(t *testing.T) {
 		IntroPoint, serviceIntroGuard, serviceIntroMiddle, clientIntroGuard, clientIntroMiddle,
 		RP, clientRPGuard, clientRPMiddle,
 	}
-	for i, n1 := range nodes {
-		for j, n2 := range nodes {
-			if i != j {
-				n1.AddPeer(n2.GetAddr())
+	for _, n1 := range nodes {
+		for _, n2 := range nodes {
+
+			if n1 == n2 {
+				continue
 			}
+			// Alice (client) <-> Bob (service) can't be neighbors
+			if (n1 == client && n2 == service) || (n1 == service && n2 == client) {
+				continue
+			}
+
+			n1.AddPeer(n2.GetAddr())
 		}
 	}
 	time.Sleep(1 * time.Second)
@@ -1091,11 +1098,18 @@ func Test_TOR_HS_IntroduceToHiddenService_SmallTimeout_Fails(t *testing.T) {
 		IntroPoint, serviceIntroGuard, serviceIntroMiddle, clientIntroGuard, clientIntroMiddle,
 		RP, clientRPGuard, clientRPMiddle,
 	}
-	for i, n1 := range nodes {
-		for j, n2 := range nodes {
-			if i != j {
-				n1.AddPeer(n2.GetAddr())
+	for _, n1 := range nodes {
+		for _, n2 := range nodes {
+
+			if n1 == n2 {
+				continue
 			}
+			// Alice (client) <-> Bob (service) can't be neighbors
+			if (n1 == client && n2 == service) || (n1 == service && n2 == client) {
+				continue
+			}
+
+			n1.AddPeer(n2.GetAddr())
 		}
 	}
 	time.Sleep(1 * time.Second)
@@ -1255,9 +1269,16 @@ func Test_TOR_HS_Rendezvous_FullHandshake_Succeeds(t *testing.T) {
 
 	for _, n := range nodes {
 		for _, m := range nodes {
-			if n != m {
-				n.AddPeer(m.GetAddr())
+
+			if n == m {
+				continue
 			}
+			// Alice <-> Bob can't be neighbors
+			if (n == alice && m == bob) || (n == bob && m == alice) {
+				continue
+			}
+
+			n.AddPeer(m.GetAddr())
 		}
 	}
 
@@ -1341,12 +1362,8 @@ func Test_TOR_HS_Rendezvous_FullHandshake_Succeeds(t *testing.T) {
 	require.Equal(t, introOutsBefore+2, len(introPoint.GetOuts()),
 		"Introduction point should send INTRODUCE2 and INTRODUCE_ACK")
 
-	require.Equal(
-		t,
-		cryptoStateBefore+1,
-		alice.Peer.GetCircuitCryptoStatesCount(aliceRPCirc),
-		"rendezvous must extend Alice circuit",
-	)
+	require.Equal(t, cryptoStateBefore+1, alice.Peer.GetCircuitCryptoStatesCount(aliceRPCirc),
+		"rendezvous must extend Alice circuit")
 }
 
 // Test_TOR_HS_Rendezvous_WrongCookie tests the case when Alice tries to introduce to Bob using a wrong cookie.
