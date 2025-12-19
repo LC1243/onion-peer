@@ -73,3 +73,14 @@ lint:
 vet:
 	go vet ./...
 
+# CLI targets
+cli-build:
+	go build -o tor-cli ./cli/cli.go
+
+cli-run: cli-build
+	./tor-cli
+
+cli-clean:
+	rm -f tor-cli
+
+.PHONY: cli-build cli-run cli-clean
