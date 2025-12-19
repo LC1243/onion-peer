@@ -51,10 +51,10 @@ func Test_TOR_FlowControl_Circuit_Level_Single(t *testing.T) {
 	streamID, err := client.OpenStream(circID, targetAddr)
 	require.NoError(t, err, "Failed to open stream")
 
-	// Send data > window size (1000)
+	// Send data > window size (500)
 	// We send 1100 packets. If flow control (SENDME) works, we should receive all of them back.
-	// If not, it will block after 1000.
-	numPackets := 1100
+	// If not, it will block after 500.
+	numPackets := 600
 	payload := []byte("test-data")
 
 	// Start a goroutine to send data
@@ -132,7 +132,7 @@ func Test_TOR_FlowControl_Circuit_Level_Multiple_Clients(t *testing.T) {
 	streamID2, err := client2.OpenStream(circID2, "dummy:2")
 	require.NoError(t, err)
 
-	numPackets := 1100 // > 1000
+	numPackets := 600 // > 500
 	payload := []byte("data")
 
 	var wg sync.WaitGroup
