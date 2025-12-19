@@ -69,16 +69,19 @@ func (s *CircuitScheduler) Schedule(msg transport.Message, dest string, isBulk b
 		select {
 		case s.bulkCh <- qPkt:
 		default:
-			s.node.log.Warn().Str("dest", dest).Msg("Bulk queue full, blocking")
-			s.bulkCh <- qPkt
+			// Never block protocol handlers on scheduler backpressure.
+			// If we block here, we can deadlock flow-control (SENDME) under load.
+			s.node.log.Warn().Str("dest", dest).Msg("Bulk queue full, sending directly")
+			go func() { _ = s.node.Unicast(qPkt.dest, qPkt.msg) }()
 		}
 	} else {
 		s.node.log.Debug().Str("dest", dest).Msg("Scheduling interactive packet")
 		select {
 		case s.interactiveCh <- qPkt:
 		default:
-			s.node.log.Warn().Str("dest", dest).Msg("Interactive queue full, blocking")
-			s.interactiveCh <- qPkt
+			// Never block protocol handlers on scheduler backpressure.
+			s.node.log.Warn().Str("dest", dest).Msg("Interactive queue full, sending directly")
+			go func() { _ = s.node.Unicast(qPkt.dest, qPkt.msg) }()
 		}
 	}
 }
