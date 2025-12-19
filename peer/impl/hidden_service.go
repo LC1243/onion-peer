@@ -1986,8 +1986,12 @@ func (n *node) HandleRelayIntroduce2(relay RelayCell) error {
 	}
 	n.cryptoStatesMu.Unlock()
 
+	n.hiddenServiceMu.RLock()
+	introPoints := n.GetServiceIntroPoints(ipIntroMsg.ServiceID)
+	n.hiddenServiceMu.RUnlock()
+
 	go func() {
-		err := n.SendRelayRendezvous1(relay.CircID, serviceIntro.Cookie, serviceIntro.RPAddr)
+		err := n.SendRelayRendezvous1(relay.CircID, serviceIntro.Cookie, serviceIntro.RPAddr, introPoints)
 		if err != nil {
 			n.log.Error().Err(err).
 				Uint16("introCircID", relay.CircID).
@@ -2006,7 +2010,11 @@ func (n *node) HandleRelayIntroduce2(relay RelayCell) error {
 
 // SendRelayRendezvous1 builds a circuit to Alice RP, sending the Rendezvous cookie, and the second half of the DH
 // handshake and a hash of the session key
-func (n *node) SendRelayRendezvous1(circID uint16, cookie [CookieSize]byte, rendezvousAddr string) error {
+func (n *node) SendRelayRendezvous1(circID uint16,
+	cookie [CookieSize]byte,
+	rendezvousAddr string,
+	introPoints []string) error {
+
 	n.log.Info().
 		Uint16("introCircID", circID).
 		Str("rpAddr", rendezvousAddr).
@@ -2022,7 +2030,10 @@ func (n *node) SendRelayRendezvous1(circID uint16, cookie [CookieSize]byte, rend
 	}
 
 	// Build circuit to the rendezvous point
-	middleHops, err := n.BuildRandomPath(2, rendezvousAddr)
+	excludes := make([]string, 0, 1+len(introPoints))
+	excludes = append(excludes, rendezvousAddr)
+	excludes = append(excludes, introPoints...)
+	middleHops, err := n.BuildRandomPath(2, excludes...)
 	if err != nil {
 		return fmt.Errorf("failed to build random path: %w", err)
 	}

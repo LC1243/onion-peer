@@ -1255,9 +1255,16 @@ func Test_TOR_HS_Rendezvous_FullHandshake_Succeeds(t *testing.T) {
 
 	for _, n := range nodes {
 		for _, m := range nodes {
-			if n != m {
-				n.AddPeer(m.GetAddr())
+
+			if n == m {
+				continue
 			}
+			// Alice <-> Bob can't be neighbors
+			if (n == alice && m == bob) || (n == bob && m == alice) {
+				continue
+			}
+
+			n.AddPeer(m.GetAddr())
 		}
 	}
 
@@ -1341,12 +1348,8 @@ func Test_TOR_HS_Rendezvous_FullHandshake_Succeeds(t *testing.T) {
 	require.Equal(t, introOutsBefore+2, len(introPoint.GetOuts()),
 		"Introduction point should send INTRODUCE2 and INTRODUCE_ACK")
 
-	require.Equal(
-		t,
-		cryptoStateBefore+1,
-		alice.Peer.GetCircuitCryptoStatesCount(aliceRPCirc),
-		"rendezvous must extend Alice circuit",
-	)
+	require.Equal(t, cryptoStateBefore+1, alice.Peer.GetCircuitCryptoStatesCount(aliceRPCirc),
+		"rendezvous must extend Alice circuit")
 }
 
 // Test_TOR_HS_Rendezvous_WrongCookie tests the case when Alice tries to introduce to Bob using a wrong cookie.
