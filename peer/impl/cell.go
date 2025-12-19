@@ -41,14 +41,29 @@ const (
 	RelaySendme           = 10
 	RelayDrop             = 11
 	RelayEstablishIntro   = 12 // Bob -> OR
-	RelayIntroEstablished = 13 // NEW: OR -> Bob (ACK)
-	RelayIntroduce1       = 14 // Alice -> Intro Point (intro message)
-	RelayRendezvous1      = 15 // Bob -> RP (cookie + DH half + H(K))
-	RelayEstablishRP      = 16 // Alice -> RP (associate cookie with her circuit)
-	RelayHSDirPublish     = 17
-	RelayHSDirLookup      = 18
-	RelayHSDirDelete      = 19
-	RelayHSDirReply       = 20
+	RelayIntroEstablished = 13 // OR -> Bob (ACK)
+	RelayEstablishRP      = 14 // Alice -> RP (associate cookie with her circuit)
+	RelayRPEstablished    = 15 // RP -> Alice (ACK)
+	RelayIntroduce1       = 16 // Alice -> Intro Point (intro message)
+	RelayIntroduceACK     = 17 // Intro Point -> Alice (ACK)
+	RelayIntroduce2       = 18 // Intro Point -> Bob (intro message)
+	RelayRendezvous1      = 19 // Bob -> RP (cookie + DH half + H(K))
+	RelayRendezvous2      = 20 // RP -> Alice (session key)
+	RelayHSDirPublish     = 21 // Commands for interacting with the hidden service directory
+	RelayHSDirLookup      = 22
+	RelayHSDirDelete      = 23
+	RelayHSDirReply       = 24
+)
+
+// CookieSize Cookie size in bytes for rendezvous points
+const (
+	CookieSize = 20
+)
+
+// Introduce ACK types
+const (
+	IntroduceACKSuccess = 0x01
+	IntroduceACKFail    = 0x02
 )
 
 type Cell struct {

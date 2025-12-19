@@ -15,6 +15,9 @@ type Peer interface {
 	Tor
 	TorStreams
 	TorHiddenServices
+	TorSecurity
+	TorRendezvous
+	TorClientIntroduction
 }
 
 // Tor defines the interface for Tor-like onion routing functionality.
@@ -104,7 +107,7 @@ type TorHiddenServices interface {
 	GetIntroPointCount(serviceID string) int
 
 	// LookupDescriptor looks up a service descriptor and returns (exists, introduction points[])
-	LookupDescriptor(circID uint16, serviceID string, timeout time.Duration) (bool, []string)
+	LookupDescriptor(circID uint16, serviceID string, timeout time.Duration) (bool, []string, []byte)
 
 	// GetIntroPointStateCount returns the number of intro points that have been established
 	GetIntroPointStateCount(serviceID string) int
@@ -125,6 +128,54 @@ type TorHiddenServices interface {
 
 	// SetPeerAsHSDir sets the flag to indicate if the peer should act as a lookup server
 	SetPeerAsHSDir(value bool)
+}
+
+// Provides methods for security profiling and testing
+type TorSecurity interface {
+	// GetDigestMismatches returns the total number of digest mismatches detected
+	GetDigestMismatches() uint64
+
+	// GetRelayDigestMismatches returns digest mismatches on relay cells (forwarded)
+	GetRelayDigestMismatches() uint64
+
+	// GetDroppedCells returns the total number of cells dropped due to errors
+	GetDroppedCells() uint64
+
+	// GetDroppedDigestMismatch returns cells dropped specifically due to digest mismatch
+	GetDroppedDigestMismatch() uint64
+
+	// GetDroppedNoNextHop returns cells dropped because no next hop available
+	GetDroppedNoNextHop() uint64
+
+	// GetDroppedDecryptionFail returns cells dropped due to decryption failure
+	GetDroppedDecryptionFail() uint64
+
+	// ResetSecurityStats resets all security statistics to zero
+	ResetSecurityStats()
+}
+
+type TorRendezvous interface {
+	// PrepareRendezvousPoint prepares a rendezvous point on the given circID for a given serviceID.
+	// It returns the cookie that the client will send to the hidden service to connect at the RP.
+	// Cookie size is set manually to do not create cyclic import dependencies.
+	PrepareRendezvousPoint(circID uint16, timeout time.Duration) (cookie [20]byte, err error)
+
+	// GetRendezvousEntriesCount returns the number of active rendezvous points managed by the peer.
+	GetRendezvousEntriesCount() int
+
+	// GetServicePublicKey returns the public key of the service with the given ID.
+	GetServicePublicKey(serviceID string) []byte
+
+	// GetCircuitCryptoStatesCount returns the number of crypto states for a given circuit.
+	GetCircuitCryptoStatesCount(circID uint16) int
+}
+
+type TorClientIntroduction interface {
+	// IntroduceToHiddenService introduces the client to the hidden service via an introduction point.
+	// It sends an INTRODUCE1 cell to the intro point on circID, containing the serviceID,
+	// servicePubKey, cookie, and rendezvousAddr (the address of the RP where the client is waiting).
+	IntroduceToHiddenService(circID uint16, serviceID string,
+		servicePubKey []byte, cookie [20]byte, rendezvousAddr string, timeout time.Duration) error
 }
 
 // Factory is the type of function we are using to create new instances of

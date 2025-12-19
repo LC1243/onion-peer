@@ -32,6 +32,8 @@ func NewPeer(conf peer.Configuration) peer.Peer {
 	level := zerolog.InfoLevel
 	if os.Getenv("GLOG") == "no" {
 		level = zerolog.Disabled
+	} else if os.Getenv("GLOG") == "trace" {
+		level = zerolog.TraceLevel
 	}
 	writer := zerolog.ConsoleWriter{Out: os.Stdout, TimeFormat: time.RFC3339}
 	n.log = zerolog.New(writer).Level(level).With().Timestamp().Logger().
@@ -51,10 +53,14 @@ func NewPeer(conf peer.Configuration) peer.Peer {
 	n.circuits = make(map[circuitKey]*Circuit)
 	n.clientCircuits = make(map[uint16]*ClientCircuit)
 	n.streamTables = make(map[uint16]*CircuitStreams)
+	n.pendingStreams = make(map[uint16]map[uint16]*Stream)
 	n.congestionControl = true
 	// Initialize rate limiting token buckets
 	n.writeBucket = NewTokenBucket(DefaultRate, DefaultCapacity)
 	n.readBucket = NewTokenBucket(DefaultRate, DefaultCapacity)
+
+	// Initialize scheduler
+	n.scheduler = NewCircuitScheduler(n)
 
 	// Initialize crypto state
 	n.peerOnionKeys = make(map[string]*rsa.PublicKey)
@@ -68,6 +74,11 @@ func NewPeer(conf peer.Configuration) peer.Peer {
 	n.introWait = make(map[uint16]chan struct{})
 	n.hsDirStore = make(map[string]*ServiceDescriptor)
 	n.hsdirWait = make(map[uint16]chan *ServiceDescriptor)
+	n.cookieAck = make(map[uint16]chan struct{})
+	n.rendezvousEntries = make(map[string]uint16) // every node can act as rendezvous point
+	n.introAckCh = make(map[uint16]chan struct{})
+	n.introAckSuccess = make(map[uint16]bool)
+	n.rendezvousStates = make(map[string]*DhRendezvousState)
 
 	// Generate onion keypair for this node
 	// Note: In production, this should be loaded from persistent storage
@@ -157,6 +168,10 @@ type node struct {
 	streamsMu    sync.RWMutex
 	streamTables map[uint16]*CircuitStreams
 
+	// Stores streams waiting for RELAY_CONNECTED
+	pendingStreamsMu sync.RWMutex
+	pendingStreams   map[uint16]map[uint16]*Stream
+
 	// Congestion control toggle
 	congestionControl bool
 
@@ -179,14 +194,29 @@ type node struct {
 	readBucket  *TokenBucket // Token bucket for incoming data
 	packetCh    chan transport.Packet
 
-	serviceKeys    map[string]*OnionKeyPair
-	hiddenServices map[string]*HiddenService
+	// Fairness Scheduler
+	scheduler *CircuitScheduler
+
+	serviceKeys     map[string]*OnionKeyPair
+	hiddenServices  map[string]*HiddenService
+	hiddenServiceMu sync.RWMutex
 
 	introPoints   map[string][]*IntroPointState // serviceID -> state
 	introPointsMu sync.RWMutex
 
 	introWaitMu sync.Mutex
 	introWait   map[uint16]chan struct{} // circID -> done
+
+	cookieAckMu sync.Mutex
+	cookieAck   map[uint16]chan struct{} // circID -> done
+
+	rendezvousEntryMu sync.Mutex
+	rendezvousEntries map[string]uint16 // cookie -> circID
+	rendezvousStates  map[string]*DhRendezvousState
+
+	introAckMu      sync.Mutex
+	introAckCh      map[uint16]chan struct{} // circID -> done
+	introAckSuccess map[uint16]bool          // circID -> success/fail
 
 	// IsHiddenServiceDir indicates whether the peer acts as a directory for hidden services
 	// so that multiple peers can look up for services.
@@ -197,8 +227,15 @@ type node struct {
 	hsDirMu     sync.RWMutex
 	hsdirWaitMu sync.Mutex
 	hsdirWait   map[uint16]chan *ServiceDescriptor
-	hsdirFragMu sync.Mutex
-	hsdirFrags  map[fragKey]*fragBuf // MsgID -> buffer
+
+	// Test hooks for security testing
+	TestCellInterceptor func(*Cell) // Function hook called before sending a cell to potentially modify it
+	TestInterceptorMu   sync.RWMutex
+
+	// Security statistics for profiling and testing
+	SecurityStats SecurityStats
+	hsdirFragMu   sync.Mutex
+	hsdirFrags    map[fragKey]*fragBuf // MsgID -> buffer
 }
 
 // Start implements peer.Service
@@ -215,6 +252,9 @@ func (n *node) Start() error {
 	// Launch the listening loop in a background goroutine so Start returns quickly.
 	n.wg.Add(1)
 	go n.listenLoop()
+
+	// Start scheduler
+	n.scheduler.Start()
 
 	// Start anti-entropy loop if configured
 	if n.conf.AntiEntropyInterval > 0 {
@@ -315,6 +355,11 @@ func (n *node) Stop() error {
 	case <-n.stopCh: // already closed
 	default:
 		close(n.stopCh)
+	}
+
+	// Stop scheduler
+	if n.scheduler != nil {
+		n.scheduler.Stop()
 	}
 
 	// Wait for background goroutines.
@@ -526,4 +571,13 @@ func (n *node) CleanupStreams(circID uint16) {
 	n.streamsMu.Lock()
 	delete(n.streamTables, circID)
 	n.streamsMu.Unlock()
+}
+
+// SetTestCellInterceptor sets a test hook for intercepting cells before sending.
+// This is used for security testing (e.g., tampering, corruption tests).
+// Only for testing - not part of the public Peer interface.
+func (n *node) SetTestCellInterceptor(interceptor func(*Cell)) {
+	n.TestInterceptorMu.Lock()
+	n.TestCellInterceptor = interceptor
+	n.TestInterceptorMu.Unlock()
 }
