@@ -124,7 +124,14 @@ func (n *node) EstablishIntroPoint(serviceID string, circID uint16, timeout time
 		return fmt.Errorf("no crypto state for circ %d", circID)
 	}
 
+	cc, ok := n.clientCircuits[circID]
+	if !ok {
+		return fmt.Errorf("not a client circuit %d", circID)
+	}
+
+	cc.CryptoMu.Lock()
 	encrypted, digest, err := EncryptRelayCellThroughCircuit(cryptoStates, payload)
+	cc.CryptoMu.Unlock()
 	if err != nil {
 		return err
 	}
@@ -140,11 +147,6 @@ func (n *node) EstablishIntroPoint(serviceID string, circID uint16, timeout time
 	cell, err := n.EncodeRelayCell(relay)
 	if err != nil {
 		return err
-	}
-
-	_, ok = n.clientCircuits[circID]
-	if !ok {
-		return fmt.Errorf("not a client circuit %d", circID)
 	}
 
 	return n.SendAndWaitForIntroReply(circID, serviceID, cell, timeout)
@@ -220,11 +222,13 @@ func (n *node) SendRelayIntroEstablished(circ *Circuit) error {
 	exitIdx := len(cryptoStates) - 1
 	cryptoState := cryptoStates[exitIdx]
 
+	circ.CryptoMu.Lock()
 	encrypted, digest, err := EncryptRelayPayload(
 		cryptoState,
 		DirectionBackward,
 		[]byte{}, // empty payload
 	)
+	circ.CryptoMu.Unlock()
 	if err != nil {
 		return err
 	}
@@ -393,11 +397,13 @@ func (n *node) SendFragmentsBackward(frags [][]byte,
 			return err
 		}
 
+		circ.CryptoMu.Lock()
 		encrypted, digest, err := EncryptRelayPayload(
 			cryptoState,
 			DirectionBackward,
 			framed,
 		)
+		circ.CryptoMu.Unlock()
 
 		if err != nil {
 			return err
@@ -775,7 +781,9 @@ func (n *node) PublishDescriptorToHSDir(serviceID string,
 
 	cc := n.clientCircuits[circID]
 
+	cc.CryptoMu.Lock()
 	err = n.SendFragments(frags, msgID, circID, cc, cryptoStates, RelayHSDirPublish)
+	cc.CryptoMu.Unlock()
 	if err != nil {
 		return err
 	}
@@ -819,10 +827,12 @@ func (n *node) LookupDescriptorViaHSDir(circID uint16, serviceID string, timeout
 		return nil, fmt.Errorf("no crypto states for circuit %d", circID)
 	}
 
+	cc.CryptoMu.Lock()
 	encrypted, digest, err := EncryptRelayCellThroughCircuit(
 		cryptoStates,
 		[]byte(serviceID),
 	)
+	cc.CryptoMu.Unlock()
 	if err != nil {
 		return nil, err
 	}
@@ -1215,7 +1225,9 @@ func (n *node) DeleteDescriptorFromHSDir(serviceID string, circID uint16, timeou
 
 	n.log.Info().Msgf("Sending %d fragments to HSDir", len(frags))
 
+	cc.CryptoMu.Lock()
 	err = n.SendFragments(frags, msgID, circID, cc, cryptoStates, RelayHSDirDelete)
+	cc.CryptoMu.Unlock()
 	if err != nil {
 		return err
 	}
@@ -1346,7 +1358,9 @@ func (n *node) SendRelayEstablishRP(circID uint16, cookie [CookieSize]byte) erro
 		return fmt.Errorf("no crypto states for circuit %d", circID)
 	}
 
+	cc.CryptoMu.Lock()
 	encryptedPayload, digest, err := EncryptRelayCellThroughCircuit(cryptoStates, cookie[:])
+	cc.CryptoMu.Unlock()
 	if err != nil {
 		return fmt.Errorf("failed to encrypt establish rendezvous cell: %w", err)
 	}
@@ -1390,7 +1404,9 @@ func (n *node) SendRPEstablished(circ *Circuit) error {
 	n.cryptoStatesMu.Unlock()
 
 	// no payload for ACK, still need to compute digest
+	circ.CryptoMu.Lock()
 	emptyPayload, digest, err := EncryptRelayPayload(cryptoState, DirectionBackward, []byte{})
+	circ.CryptoMu.Unlock()
 	if err != nil {
 		return err
 	}
@@ -1462,7 +1478,9 @@ func (n *node) SendIntroduceAck(circ *Circuit, success bool) error {
 	} else {
 		flag = IntroduceACKFail
 	}
+	circ.CryptoMu.Lock()
 	flagPayload, digest, err := EncryptRelayPayload(cryptoState, DirectionBackward, []byte{flag})
+	circ.CryptoMu.Unlock()
 	if err != nil {
 		return err
 	}
@@ -1740,7 +1758,9 @@ func (n *node) SendIntroduce1Message(circID uint16, serviceID string,
 		return fmt.Errorf("failed to encode IP introduce message: %w", err)
 	}
 
+	cc.CryptoMu.Lock()
 	encrypted, digest, err := EncryptRelayCellThroughCircuit(cryptoStates, ipPayload)
+	cc.CryptoMu.Unlock()
 	if err != nil {
 		return fmt.Errorf("failed to encrypt relay cell: %w", err)
 	}
@@ -1778,7 +1798,9 @@ func (n *node) SendIntroduce2Message(circ *Circuit, encryptedBlob []byte) error 
 	cryptoState := n.circuitCryptoStates[circ.InCircID][exitIdx]
 	n.cryptoStatesMu.Unlock()
 
+	circ.CryptoMu.Lock()
 	payload, digest, err := EncryptRelayPayload(cryptoState, DirectionBackward, encryptedBlob)
+	circ.CryptoMu.Unlock()
 	if err != nil {
 		return err
 	}
@@ -2062,6 +2084,10 @@ func (n *node) SendRelayRendezvous1(circID uint16,
 		return fmt.Errorf("no crypto states for RP circuit")
 	}
 
+	n.clientCircuitsMu.RLock()
+	cc := n.clientCircuits[rpCircID]
+	n.clientCircuitsMu.RUnlock()
+
 	// Generate Bob’s DH keypair
 	var bobPriv, bobPub [32]byte
 	_, err = rand.Read(bobPriv[:])
@@ -2088,7 +2114,9 @@ func (n *node) SendRelayRendezvous1(circID uint16,
 	payload.Write(bobPub[:])
 	payload.Write(handshakeHash)
 
+	cc.CryptoMu.Lock()
 	encrypted, digest, err := EncryptRelayCellThroughCircuit(cryptoStates, payload.Bytes())
+	cc.CryptoMu.Unlock()
 	if err != nil {
 		return err
 	}
@@ -2110,10 +2138,6 @@ func (n *node) SendRelayRendezvous1(circID uint16,
 	n.log.Info().
 		Uint16("rpCircID", rpCircID).
 		Msg("Sending Rendezvous1 to rendezvous point")
-
-	n.clientCircuitsMu.RLock()
-	cc := n.clientCircuits[rpCircID]
-	n.clientCircuitsMu.RUnlock()
 
 	return n.SendCell(cc.Hops[0], cell, cc)
 }
@@ -2163,7 +2187,9 @@ func (n *node) SendRelayRendezvous2(data []byte, circID uint16, circ *Circuit) e
 	cryptoState := n.circuitCryptoStates[circID][exitIdx]
 	n.cryptoStatesMu.Unlock()
 
+	circ.CryptoMu.Lock()
 	payload, digest, err := EncryptRelayPayload(cryptoState, DirectionBackward, data)
+	circ.CryptoMu.Unlock()
 
 	if err != nil {
 		return err
