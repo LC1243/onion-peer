@@ -828,18 +828,61 @@ func Test_TO_HS_EncodeDecodeIPIntroductionMessage_Succeeds(t *testing.T) {
 
 // Test_TOR_HS_IntroduceToHiddenService_NoSuchService_Fails tests introducing to a non-existent hidden service
 func Test_TOR_HS_IntroduceToHiddenService_NoIntroPoints_Fails(t *testing.T) {
-	client, _, _, _, circID := Build3HopCircuit(t)
+	transp := channelFac()
+
+	// Create introduction point circuit nodes
+	client := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer client.Stop()
+	IPGuard := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer IPGuard.Stop()
+	IPMiddle := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer IPMiddle.Stop()
+	IP := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer IP.Stop()
+
+	// Create rendezvous point circuit nodes
+	RPGuard := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer RPGuard.Stop()
+	RPMiddle := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer RPMiddle.Stop()
+	RP := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer RP.Stop()
+
+	// Set up the nodes
+	nodes := []z.TestNode{client, IPGuard, IPMiddle, IP, RPGuard, RPMiddle, RP}
+	for i, n1 := range nodes {
+		for j, n2 := range nodes {
+			if i != j {
+				n1.AddPeer(n2.GetAddr())
+			}
+		}
+	}
+	time.Sleep(100 * time.Millisecond)
+	z.PopulateOnionKeys(nodes)
+
+	RPCircID, err := client.Peer.BuildCircuit(
+		[3]string{RPGuard.GetAddr(), RPMiddle.GetAddr(), RP.GetAddr()},
+		5*time.Second,
+	)
+	require.NoError(t, err)
+	IPCircID, err := client.Peer.BuildCircuit(
+		[3]string{IPGuard.GetAddr(), IPMiddle.GetAddr(), IP.GetAddr()},
+		5*time.Second,
+	)
+	require.NoError(t, err)
+
+	// Get cookie and set up RP
+	cookie, err := client.Peer.PrepareRendezvousPoint(RPCircID, 2*time.Second)
+	require.NoError(t, err)
 
 	// Create a fake service ID
 	serviceID := "42"
-	cookie := [20]byte{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19}
-	RVAddr := "192.168.2.2"
 	keyPair, err := impl.GenerateServiceKeyPair()
 	require.NoError(t, err)
 	servicePubKey := x509.MarshalPKCS1PublicKey(keyPair.Public)
 
 	// The introduction should send a false Introduce ACK back since it do not contain any intro points info
-	err = client.Peer.IntroduceToHiddenService(circID, serviceID, servicePubKey, cookie, RVAddr, time.Second)
+	err = client.Peer.IntroduceToHiddenService(IPCircID, serviceID, servicePubKey, cookie, RP.GetAddr(), time.Second)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "introduction failed according to ACK")
 }
@@ -870,6 +913,14 @@ func Test_TOR_HS_IntroduceToHiddenService_Succeeds(t *testing.T) {
 	clientHSDirMiddle := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
 	defer clientHSDirMiddle.Stop()
 
+	// Client <-> Rendezvous Point circuit nodes
+	clientRPGuard := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer clientRPGuard.Stop()
+	clientRPMiddle := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer clientRPMiddle.Stop()
+	RP := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer RP.Stop()
+
 	// Hidden service <-> Intro Point circuit nodes
 	serviceIntroGuard := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
 	defer serviceIntroGuard.Stop()
@@ -889,6 +940,7 @@ func Test_TOR_HS_IntroduceToHiddenService_Succeeds(t *testing.T) {
 		client, service,
 		HSDir, serviceHSDirGuard, serviceHSDirMiddle, clientHSDirGuard, clientHSDirMiddle,
 		IntroPoint, serviceIntroGuard, serviceIntroMiddle, clientIntroGuard, clientIntroMiddle,
+		RP, clientRPGuard, clientRPMiddle,
 	}
 	for i, n1 := range nodes {
 		for j, n2 := range nodes {
@@ -915,6 +967,12 @@ func Test_TOR_HS_IntroduceToHiddenService_Succeeds(t *testing.T) {
 
 	clientIntroCircID, err := client.Peer.BuildCircuit(
 		[3]string{clientIntroGuard.GetAddr(), clientIntroMiddle.GetAddr(), IntroPoint.GetAddr()},
+		5*time.Second,
+	)
+	require.NoError(t, err)
+
+	clientRPCircID, err := client.Peer.BuildCircuit(
+		[3]string{clientRPGuard.GetAddr(), clientRPMiddle.GetAddr(), RP.GetAddr()},
 		5*time.Second,
 	)
 	require.NoError(t, err)
@@ -952,7 +1010,9 @@ func Test_TOR_HS_IntroduceToHiddenService_Succeeds(t *testing.T) {
 	require.Len(t, introORs, 1)
 	require.Equal(t, IntroPoint.GetAddr(), introORs[0])
 
-	// Prepare rendezvous point ignored for this test
+	// Prepare rendezvous point
+	cookie, err := client.Peer.PrepareRendezvousPoint(clientRPCircID, 2*time.Second)
+	require.NoError(t, err)
 
 	// Check initial packet counts
 	clientSentBefore := len(client.GetOuts())
@@ -961,9 +1021,8 @@ func Test_TOR_HS_IntroduceToHiddenService_Succeeds(t *testing.T) {
 	introSentBefore := len(IntroPoint.GetOuts())
 
 	// Introduce to hidden service
-	fakeCookie := [impl.CookieSize]byte{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19}
 	err = client.Peer.IntroduceToHiddenService(clientIntroCircID, serviceID, servicePubKey,
-		fakeCookie, "rendezvous.example.onion:1234", time.Second)
+		cookie, "rendezvous.example.onion:1234", time.Second)
 	require.NoError(t, err)
 
 	// Check packet counts after
@@ -1003,6 +1062,14 @@ func Test_TOR_HS_IntroduceToHiddenService_SmallTimeout_Fails(t *testing.T) {
 	clientHSDirMiddle := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
 	defer clientHSDirMiddle.Stop()
 
+	// Client <-> Rendezvous Point circuit nodes
+	clientRPGuard := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer clientRPGuard.Stop()
+	clientRPMiddle := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer clientRPMiddle.Stop()
+	RP := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer RP.Stop()
+
 	// Hidden service <-> Intro Point circuit nodes
 	serviceIntroGuard := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
 	defer serviceIntroGuard.Stop()
@@ -1022,6 +1089,7 @@ func Test_TOR_HS_IntroduceToHiddenService_SmallTimeout_Fails(t *testing.T) {
 		client, service,
 		HSDir, serviceHSDirGuard, serviceHSDirMiddle, clientHSDirGuard, clientHSDirMiddle,
 		IntroPoint, serviceIntroGuard, serviceIntroMiddle, clientIntroGuard, clientIntroMiddle,
+		RP, clientRPGuard, clientRPMiddle,
 	}
 	for i, n1 := range nodes {
 		for j, n2 := range nodes {
@@ -1048,6 +1116,12 @@ func Test_TOR_HS_IntroduceToHiddenService_SmallTimeout_Fails(t *testing.T) {
 
 	clientIntroCircID, err := client.Peer.BuildCircuit(
 		[3]string{clientIntroGuard.GetAddr(), clientIntroMiddle.GetAddr(), IntroPoint.GetAddr()},
+		5*time.Second,
+	)
+	require.NoError(t, err)
+
+	clientRPCircID, err := client.Peer.BuildCircuit(
+		[3]string{clientRPGuard.GetAddr(), clientRPMiddle.GetAddr(), RP.GetAddr()},
 		5*time.Second,
 	)
 	require.NoError(t, err)
@@ -1085,7 +1159,9 @@ func Test_TOR_HS_IntroduceToHiddenService_SmallTimeout_Fails(t *testing.T) {
 	require.Len(t, introORs, 1)
 	require.Equal(t, IntroPoint.GetAddr(), introORs[0])
 
-	// Prepare rendezvous point ignored for this test
+	// Prepare rendezvous point
+	cookie, err := client.Peer.PrepareRendezvousPoint(clientRPCircID, 2*time.Second)
+	require.NoError(t, err)
 
 	// Check initial packet counts
 	clientSentBefore := len(client.GetOuts())
@@ -1094,9 +1170,8 @@ func Test_TOR_HS_IntroduceToHiddenService_SmallTimeout_Fails(t *testing.T) {
 	introSentBefore := len(IntroPoint.GetOuts())
 
 	// Introduce to hidden service
-	fakeCookie := [impl.CookieSize]byte{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19}
 	err = client.Peer.IntroduceToHiddenService(clientIntroCircID, serviceID, servicePubKey,
-		fakeCookie, "rendezvous.example.onion:1234", time.Nanosecond) // too small timeout
+		cookie, "rendezvous.example.onion:1234", time.Nanosecond) // too small timeout
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "timed out")
 
