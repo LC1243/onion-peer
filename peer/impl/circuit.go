@@ -1111,86 +1111,11 @@ func (n *node) HandleRelayExtendedAsOP(relayCell RelayCell) error {
 	switch cc.State {
 	case CircuitStateExtending1:
 		// Middle responded, now extend to Exit
-
-		n.log.Info().Uint16("circID", circID).Msg("Middle Responded, Finishing handshake for Middle")
-
-		// At this point the Payload of EXTENDED should have the second half of the handshake
-		// So decrypt the payload add complete the handshake
-		cryptoStates := n.circuitCryptoStates[cc.CircID]
-		if len(cryptoStates) == 0 {
-			return fmt.Errorf("no crypto states found for circuit %d", circID)
-		}
-
-		// Decrypt through guard layer
-		cc.CryptoMu.Lock()
-		relayExtendedPayloadPlainText, _ := DecryptRelayCellAtHop(
-			cryptoStates[0],
-			DirectionBackward,
-			relayCell.Data,
-			[6]byte{}, // dummy digest as verification in backward direction is not needed
-		)
-		cc.CryptoMu.Unlock()
-
-		// Complete the handshake as the initiator for the Middle node
-		circuitCryptoState, err := n.FinishHandshakeAsInitiator(
-			n.diffieHellmanHandshakePairs[cc.CircID],
-			relayExtendedPayloadPlainText,
-		)
-		if err != nil {
-			return fmt.Errorf("failed to complete handshake for circuit %d at Middle: %w", circID, err)
-		}
-
-		// Append the middle hop crypto state to the slice
-		n.circuitCryptoStates[cc.CircID] = append(n.circuitCryptoStates[cc.CircID], circuitCryptoState)
-
-		cc.State = CircuitStateExtending2
-		n.log.Info().Uint16("circID", circID).Msg("Middle connected, extending to Exit")
-		return n.SendExtendToHop(cc, cc.Hops[2])
+		return n.handleMiddleExtended(circID, cc, relayCell)
 
 	case CircuitStateExtending2:
 		// Exit responded, complete the handshake and circuit is ready!
-
-		n.log.Info().Uint16("circID", circID).Msg("Exit Responded, Finishing handshake for Exit")
-
-		// Decrypt the RELAY_EXTENDED payload through the already established hops
-		cryptoStates := n.circuitCryptoStates[cc.CircID]
-		if len(cryptoStates) < 2 {
-			return fmt.Errorf("insufficient crypto states (%d) for circuit %d", len(cryptoStates), circID)
-		}
-
-		// Decrypt through middle and guard layers to get exit's handshake response
-		cc.CryptoMu.Lock()
-		relayExtendedPayloadPlainText, _ := DecryptRelayCellAtHop(
-			cryptoStates[1],
-			DirectionBackward,
-			relayCell.Data,
-			[6]byte{}, // dummy digest
-		)
-
-		relayExtendedPayloadPlainText, _ = DecryptRelayCellAtHop(
-			cryptoStates[0],
-			DirectionBackward,
-			relayExtendedPayloadPlainText,
-			[6]byte{}, // dummy digest
-		)
-		cc.CryptoMu.Unlock()
-
-		// Complete the handshake as the initiator for the Exit node
-		circuitCryptoState, err := n.FinishHandshakeAsInitiator(
-			n.diffieHellmanHandshakePairs[cc.CircID],
-			relayExtendedPayloadPlainText,
-		)
-		if err != nil {
-			return fmt.Errorf("failed to complete handshake for circuit %d at Exit: %w", circID, err)
-		}
-
-		// Append the exit hop crypto state to the slice
-		n.circuitCryptoStates[cc.CircID] = append(n.circuitCryptoStates[cc.CircID], circuitCryptoState)
-
-		cc.State = CircuitStateReady
-		n.log.Info().Uint16("circID", circID).Msg("Circuit fully established!")
-		close(cc.ReadyChan)
-		return nil
+		return n.handleExitExtended(circID, cc, relayCell)
 
 	case CircuitStateCreating, CircuitStateReady, CircuitStateFailed:
 		return fmt.Errorf("unexpected RelayExtended in state %d", cc.State)
@@ -1198,6 +1123,87 @@ func (n *node) HandleRelayExtendedAsOP(relayCell RelayCell) error {
 	default:
 		return fmt.Errorf("unexpected RelayExtended in state %d", cc.State)
 	}
+}
+
+// handleMiddleExtended processes RELAY_EXTENDED from the middle hop
+func (n *node) handleMiddleExtended(circID uint16, cc *ClientCircuit, relayCell RelayCell) error {
+	n.log.Info().Uint16("circID", circID).Msg("Middle Responded, Finishing handshake for Middle")
+
+	// Decrypt the payload through guard layer
+	cryptoStates := n.circuitCryptoStates[cc.CircID]
+	if len(cryptoStates) == 0 {
+		return fmt.Errorf("no crypto states found for circuit %d", circID)
+	}
+
+	cc.CryptoMu.Lock()
+	relayExtendedPayloadPlainText, _ := DecryptRelayCellAtHop(
+		cryptoStates[0],
+		DirectionBackward,
+		relayCell.Data,
+		[6]byte{}, // dummy digest as verification in backward direction is not needed
+	)
+	cc.CryptoMu.Unlock()
+
+	// Complete the handshake as the initiator for the Middle node
+	circuitCryptoState, err := n.FinishHandshakeAsInitiator(
+		n.diffieHellmanHandshakePairs[cc.CircID],
+		relayExtendedPayloadPlainText,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to complete handshake for circuit %d at Middle: %w", circID, err)
+	}
+
+	// Append the middle hop crypto state to the slice
+	n.circuitCryptoStates[cc.CircID] = append(n.circuitCryptoStates[cc.CircID], circuitCryptoState)
+
+	cc.State = CircuitStateExtending2
+	n.log.Info().Uint16("circID", circID).Msg("Middle connected, extending to Exit")
+	return n.SendExtendToHop(cc, cc.Hops[2])
+}
+
+// handleExitExtended processes RELAY_EXTENDED from the exit hop
+func (n *node) handleExitExtended(circID uint16, cc *ClientCircuit, relayCell RelayCell) error {
+	n.log.Info().Uint16("circID", circID).Msg("Exit Responded, Finishing handshake for Exit")
+
+	// Decrypt the RELAY_EXTENDED payload through the already established hops
+	cryptoStates := n.circuitCryptoStates[cc.CircID]
+	if len(cryptoStates) < 2 {
+		return fmt.Errorf("insufficient crypto states (%d) for circuit %d", len(cryptoStates), circID)
+	}
+
+	// Decrypt through middle and guard layers to get exit's handshake response
+	cc.CryptoMu.Lock()
+	relayExtendedPayloadPlainText, _ := DecryptRelayCellAtHop(
+		cryptoStates[1],
+		DirectionBackward,
+		relayCell.Data,
+		[6]byte{}, // dummy digest
+	)
+
+	relayExtendedPayloadPlainText, _ = DecryptRelayCellAtHop(
+		cryptoStates[0],
+		DirectionBackward,
+		relayExtendedPayloadPlainText,
+		[6]byte{}, // dummy digest
+	)
+	cc.CryptoMu.Unlock()
+
+	// Complete the handshake as the initiator for the Exit node
+	circuitCryptoState, err := n.FinishHandshakeAsInitiator(
+		n.diffieHellmanHandshakePairs[cc.CircID],
+		relayExtendedPayloadPlainText,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to complete handshake for circuit %d at Exit: %w", circID, err)
+	}
+
+	// Append the exit hop crypto state to the slice
+	n.circuitCryptoStates[cc.CircID] = append(n.circuitCryptoStates[cc.CircID], circuitCryptoState)
+
+	cc.State = CircuitStateReady
+	n.log.Info().Uint16("circID", circID).Msg("Circuit fully established!")
+	close(cc.ReadyChan)
+	return nil
 }
 
 // HandleRelayConnectedAsOP sets the stream as open
@@ -2732,6 +2738,7 @@ func (n *node) removePendingStream(circID, streamID uint16) {
 
 // processCircuitSendmeFromPrevHop handles circuit-level SENDME from PrevHop
 // Returns true if SENDME was processed, false otherwise
+//nolint:dupl // Similar to processCircuitSendmeFromNextHop but handles different direction
 func (n *node) processCircuitSendmeFromPrevHop(relayCell RelayCell, circ *Circuit) bool {
 	if !n.congestionControl.Load() || relayCell.Command != RelaySendme || relayCell.StreamID != 0 {
 		return false
@@ -2767,6 +2774,7 @@ func (n *node) processCircuitSendmeFromPrevHop(relayCell RelayCell, circ *Circui
 
 // processCircuitSendmeFromNextHop handles circuit-level SENDME from NextHop
 // Returns true if SENDME was processed, false otherwise
+//nolint:dupl // Similar to processCircuitSendmeFromPrevHop but handles different direction
 func (n *node) processCircuitSendmeFromNextHop(relayCell RelayCell, circ *Circuit) bool {
 	if !n.congestionControl.Load() || relayCell.Command != RelaySendme || relayCell.StreamID != 0 {
 		return false
@@ -2887,4 +2895,3 @@ func (n *node) queueOrSendBackward(circ *Circuit, cell Cell, isDataCell bool) er
 
 	return n.SendCell(circ.PrevHop, cell, circ)
 }
-
