@@ -341,6 +341,10 @@ func (n *node) HandleRelayAsOP(cell Cell, src string, cc *ClientCircuit) error {
 		return n.HandleRelayRPEstablished(relayCell)
 	case RelayIntroduceACK:
 		return n.HandleRelayIntroduceACK(relayCell)
+	case RelayIntroduce2:
+		return n.HandleRelayIntroduce2(relayCell)
+	case RelayRendezvous2:
+		return n.HandleRelayRendezvous2(relayCell)
 	default:
 		return fmt.Errorf("unexpected relay command %d for client circuit", relayCell.Command)
 	}
@@ -607,7 +611,7 @@ func (n *node) HandleRelayAtEndpoint(relayCell RelayCell, circ *Circuit) error {
 	case RelayEstablishIntro:
 		return n.HandleRelayEstablishIntro(relayCell, circ)
 	case RelayRendezvous1:
-		return nil
+		return n.HandleRelayRendezvous1(relayCell, circ)
 	case RelayHSDirPublish:
 		return n.HandleRelayHSDirPublish(relayCell, circ)
 	case RelayHSDirLookup:
@@ -2193,30 +2197,6 @@ func (n *node) validateStreamForSending(circID, streamID uint16) (*Stream, error
 	return stream, nil
 }
 
-// getClientCircuitAndCrypto retrieves the client circuit and its crypto states
-func (n *node) getClientCircuitAndCrypto(circID uint16) (*ClientCircuit, []*CircuitCryptoState, error) {
-	n.clientCircuitsMu.RLock()
-	cc, exists := n.clientCircuits[circID]
-	n.clientCircuitsMu.RUnlock()
-
-	if !exists {
-		n.log.Error().
-			Uint16("circID", circID).
-			Msg("Client circuit not found")
-		return nil, nil, fmt.Errorf("client circuit %d not found", circID)
-	}
-
-	cryptoStates := n.circuitCryptoStates[circID]
-	if len(cryptoStates) == 0 {
-		n.log.Error().
-			Uint16("circID", circID).
-			Msg("No crypto states found for circuit")
-		return nil, nil, fmt.Errorf("no crypto states found for circuit %d", circID)
-	}
-
-	return cc, cryptoStates, nil
-}
-
 // encryptAndSendRelayData encrypts data and sends it as a RELAY_DATA cell
 func (n *node) encryptAndSendRelayData(
 	circID, streamID uint16,
@@ -2570,7 +2550,7 @@ func (n *node) sendRelaySendmeToHopAsOP(cc *ClientCircuit) error {
 }
 
 // decryptRelayDataAtClient decrypts RELAY_DATA through all circuit hops
-func decryptRelayDataAtClient(cryptoStates []*CircuitCryptoState, encryptedPayload []byte, digest [6]byte) []byte {
+func decryptRelayDataAtClient(cryptoStates []*CircuitCryptoState, encryptedPayload []byte) []byte {
 	plainPayload := encryptedPayload
 	for i := range cryptoStates {
 		// Decrypt one layer at a time without digest verification
@@ -2744,7 +2724,7 @@ func (n *node) HandleRelayDataAsOP(relay RelayCell, cc *ClientCircuit) error {
 
 	// Decrypt the payload through all hops
 	cc.CryptoMu.Lock()
-	plainPayload := decryptRelayDataAtClient(cryptoStates, relay.Data, relay.Digest)
+	plainPayload := decryptRelayDataAtClient(cryptoStates, relay.Data)
 	cc.CryptoMu.Unlock()
 
 	// Store the decrypted data for testing
