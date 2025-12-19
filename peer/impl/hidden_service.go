@@ -397,11 +397,13 @@ func (n *node) SendFragmentsBackward(frags [][]byte,
 			return err
 		}
 
+		circ.CryptoMu.Lock()
 		encrypted, digest, err := EncryptRelayPayload(
 			cryptoState,
 			DirectionBackward,
 			framed,
 		)
+		circ.CryptoMu.Unlock()
 
 		if err != nil {
 			return err
@@ -741,8 +743,6 @@ func (n *node) SendHSDirReply(circ *Circuit, payload []byte) error {
 	cryptoState := n.circuitCryptoStates[circ.InCircID][len(n.circuitCryptoStates[circ.InCircID])-1]
 	n.cryptoStatesMu.Unlock()
 
-	circ.CryptoMu.Lock()
-	defer circ.CryptoMu.Unlock()
 	return n.SendFragmentsBackward(frags, msgID, circ, cryptoState, RelayHSDirReply)
 }
 
