@@ -78,6 +78,7 @@ func NewPeer(conf peer.Configuration) peer.Peer {
 	n.rendezvousEntries = make(map[string]uint16) // every node can act as rendezvous point
 	n.introAckCh = make(map[uint16]chan struct{})
 	n.introAckSuccess = make(map[uint16]bool)
+	n.rendezvousStates = make(map[string]*DhRendezvousState)
 
 	// Generate onion keypair for this node
 	// Note: In production, this should be loaded from persistent storage
@@ -196,8 +197,9 @@ type node struct {
 	// Fairness Scheduler
 	scheduler *CircuitScheduler
 
-	serviceKeys    map[string]*OnionKeyPair
-	hiddenServices map[string]*HiddenService
+	serviceKeys     map[string]*OnionKeyPair
+	hiddenServices  map[string]*HiddenService
+	hiddenServiceMu sync.RWMutex
 
 	introPoints   map[string][]*IntroPointState // serviceID -> state
 	introPointsMu sync.RWMutex
@@ -210,6 +212,7 @@ type node struct {
 
 	rendezvousEntryMu sync.Mutex
 	rendezvousEntries map[string]uint16 // cookie -> circID
+	rendezvousStates  map[string]*DhRendezvousState
 
 	introAckMu      sync.Mutex
 	introAckCh      map[uint16]chan struct{} // circID -> done
@@ -231,8 +234,8 @@ type node struct {
 
 	// Security statistics for profiling and testing
 	SecurityStats SecurityStats
-	hsdirFragMu sync.Mutex
-	hsdirFrags  map[fragKey]*fragBuf // MsgID -> buffer
+	hsdirFragMu   sync.Mutex
+	hsdirFrags    map[fragKey]*fragBuf // MsgID -> buffer
 }
 
 // Start implements peer.Service

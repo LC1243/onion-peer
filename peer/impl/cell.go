@@ -41,17 +41,18 @@ const (
 	RelaySendme           = 10
 	RelayDrop             = 11
 	RelayEstablishIntro   = 12 // Bob -> OR
-	RelayIntroEstablished = 13 // NEW: OR -> Bob (ACK)
-	RelayIntroduce1       = 14 // Alice -> Intro Point (intro message)
-	RelayIntroduce2       = 15 // RP -> Bob (intro message)
-	RelayIntroduceACK     = 16 // Intro Point -> Alice (ACK)
-	RelayRendezvous1      = 17 // Bob -> RP (cookie + DH half + H(K))
-	RelayEstablishRP      = 18 // Alice -> RP (associate cookie with her circuit)
-	RelayRPEstablished    = 19 // RP -> Alice (ACK)
-	RelayHSDirPublish     = 20
-	RelayHSDirLookup      = 21
-	RelayHSDirDelete      = 22
-	RelayHSDirReply       = 23
+	RelayIntroEstablished = 13 // OR -> Bob (ACK)
+	RelayEstablishRP      = 14 // Alice -> RP (associate cookie with her circuit)
+	RelayRPEstablished    = 15 // RP -> Alice (ACK)
+	RelayIntroduce1       = 16 // Alice -> Intro Point (intro message)
+	RelayIntroduceACK     = 17 // Intro Point -> Alice (ACK)
+	RelayIntroduce2       = 18 // Intro Point -> Bob (intro message)
+	RelayRendezvous1      = 19 // Bob -> RP (cookie + DH half + H(K))
+	RelayRendezvous2      = 20 // RP -> Alice (session key)
+	RelayHSDirPublish     = 21 // Commands for interacting with the hidden service directory
+	RelayHSDirLookup      = 22
+	RelayHSDirDelete      = 23
+	RelayHSDirReply       = 24
 )
 
 // CookieSize Cookie size in bytes for rendezvous points
