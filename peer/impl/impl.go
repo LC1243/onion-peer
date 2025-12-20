@@ -78,6 +78,7 @@ func NewPeer(conf peer.Configuration) peer.Peer {
 	// Initialize server-related structures
 	n.serverConnections = make(map[string]string)
 	n.serverReceivedData = make(map[string][][]byte)
+	n.serverConnectionIDs = make(map[string]string)
 	n.serverStreamMap = make(map[string]*serverStreamMapping)
 
 	// Generate onion keypair for this node
@@ -241,6 +242,7 @@ type node struct {
 	serverConnections   map[string]string // targetAddr -> serverAddr
 	serverDataMu        sync.RWMutex
 	serverReceivedData  map[string][][]byte             // exitNodeAddr -> []data at server
+	serverConnectionIDs map[string]string               // exitNodeAddr -> connectionID at server
 	serverStreamMap     map[string]*serverStreamMapping // connectionID -> stream info at exit node
 	serverStreamMapMu   sync.RWMutex
 }

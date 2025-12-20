@@ -41,14 +41,12 @@ func (n *node) ServerSendData(exitNodeAddr string, data []byte) error {
 
 	// Get the most recent connectionID for this exit node
 	n.serverDataMu.RLock()
-	connIDData, hasConnID := n.serverReceivedData[exitNodeAddr+"__lastConnID"]
+	connectionID, hasConnID := n.serverConnectionIDs[exitNodeAddr]
 	n.serverDataMu.RUnlock()
 
-	if !hasConnID || len(connIDData) == 0 {
+	if !hasConnID {
 		return fmt.Errorf("no connection ID found for exit node %s", exitNodeAddr)
 	}
-
-	connectionID := string(connIDData[0])
 
 	msg := types.ServerData{
 		Type:         "reply",
@@ -143,7 +141,7 @@ func (n *node) execServerData(msg types.Message, pkt transport.Packet) error {
 		// Handle data received by server from exit node
 		n.serverDataMu.Lock()
 		n.serverReceivedData[pkt.Header.Source] = append(n.serverReceivedData[pkt.Header.Source], sd.Data)
-		n.serverReceivedData[pkt.Header.Source+"__lastConnID"] = [][]byte{[]byte(sd.ConnectionID)}
+		n.serverConnectionIDs[pkt.Header.Source] = sd.ConnectionID
 		n.serverDataMu.Unlock()
 
 		n.log.Info().
