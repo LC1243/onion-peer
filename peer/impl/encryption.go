@@ -291,10 +291,10 @@ func generateCircuitKeys(sharedSecret []byte) (*CircuitCryptoState, error) {
 	}
 
 	// Initialize running digest states with the digest keys
-	forwardDigest := sha1.New() //nolint:gosec	// Tor spec says to use SHA-1
+	forwardDigest := sha1.New() //nolint:gosec // SHA-1 used for Tor protocol compatibility
 	forwardDigest.Write(forwardDigestKey)
 
-	backwardDigest := sha1.New() //nolint:gosec	// Tor spec says to use SHA-1
+	backwardDigest := sha1.New() //nolint:gosec // SHA-1 used for Tor protocol compatibility
 	backwardDigest.Write(backwardDigestKey)
 
 	return &CircuitCryptoState{
