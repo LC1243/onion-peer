@@ -1025,7 +1025,7 @@ func Test_TOR_HS_IntroduceToHiddenService_Succeeds(t *testing.T) {
 
 	// Check initial packet counts
 	clientSentBefore := len(client.GetOuts())
-	clientReceivedBefore := len(client.GetOuts())
+	clientReceivedBefore := len(client.GetIns())
 	introRecvBefore := len(IntroPoint.GetIns())
 	introSentBefore := len(IntroPoint.GetOuts())
 
@@ -1036,7 +1036,7 @@ func Test_TOR_HS_IntroduceToHiddenService_Succeeds(t *testing.T) {
 
 	// Check packet counts after
 	clientSentAfter := len(client.GetOuts())
-	clientReceivedAfter := len(client.GetOuts())
+	clientReceivedAfter := len(client.GetIns())
 	introRecvAfter := len(IntroPoint.GetIns())
 	introSentAfter := len(IntroPoint.GetOuts())
 
@@ -1181,7 +1181,7 @@ func Test_TOR_HS_IntroduceToHiddenService_SmallTimeout_Fails(t *testing.T) {
 
 	// Check initial packet counts
 	clientSentBefore := len(client.GetOuts())
-	clientReceivedBefore := len(client.GetOuts())
+	clientReceivedBefore := len(client.GetIns())
 	introRecvBefore := len(IntroPoint.GetIns())
 	introSentBefore := len(IntroPoint.GetOuts())
 
@@ -1195,7 +1195,7 @@ func Test_TOR_HS_IntroduceToHiddenService_SmallTimeout_Fails(t *testing.T) {
 
 	// Check packet counts after
 	clientSentAfter := len(client.GetOuts())
-	clientReceivedAfter := len(client.GetOuts())
+	clientReceivedAfter := len(client.GetIns())
 	introRecvAfter := len(IntroPoint.GetIns())
 	introSentAfter := len(IntroPoint.GetOuts())
 
