@@ -12,6 +12,7 @@ import (
 	"io"
 	"time"
 
+	"github.com/rs/zerolog/log"
 	"golang.org/x/crypto/curve25519"
 )
 
@@ -2151,7 +2152,19 @@ func (n *node) HandleRelayRendezvous1(relay RelayCell, circ *Circuit) error {
 	n.log.Info().
 		Uint16("aliceCircID", aliceCircID).
 		Msg("Forwarding Rendezvous2 to Alice")
-	return n.SendRelayRendezvous2(data, aliceCircID, aliceCirc)
+	err := n.SendRelayRendezvous2(data, aliceCircID, aliceCirc)
+	if err != nil {
+		return fmt.Errorf("failed to send rendezvous2 to Alice: %w", err)
+	}
+
+	// Create client and service circuit association
+	n.rendezvousAssocMu.Lock()
+	n.rendezvousAssoc[aliceCirc.InCircID] = circ.InCircID
+	n.rendezvousAssoc[circ.InCircID] = aliceCirc.InCircID
+	log.Debug().Msgf("Rendezvous association created: AliceInCirc %d <-> BobOutCirc %d", aliceCirc.InCircID, circ.InCircID)
+	log.Debug().Msgf("Rendezvous association created: BobInCirc %d <-> AliceOutCirc %d", circ.InCircID, aliceCirc.InCircID)
+	n.rendezvousAssocMu.Unlock()
+	return nil
 }
 
 // SendRelayRendezvous2 sends a message from RP to Alice with Bob's second half of the DH handshake, the hash and cookie
