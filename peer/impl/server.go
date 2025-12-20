@@ -7,6 +7,8 @@ import (
 	"go.dedis.ch/cs438/types"
 )
 
+// Server feature addition done mostly using copilot
+
 // RegisterAsServer registers this node as a server for the specified target address.
 func (n *node) RegisterAsServer(exitNodeAddr, targetAddr string) error {
 	n.log.Info().
