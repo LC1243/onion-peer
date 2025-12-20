@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/rs/zerolog/log"
 	"go.dedis.ch/cs438/transport"
 	"go.dedis.ch/cs438/transport/udp"
 )
@@ -259,7 +260,43 @@ func (n *node) HandleCreated(cell Cell, src string) error {
 // HandleRelay handles a Relay cell
 // TODO: All the relay cells need to have the command encrypted as well
 func (n *node) HandleRelay(cell Cell, src string) error {
-	// First, check if this is for a client circuit (OP receiving relay cells)
+	// First, check if this is for a rendezvous circuit
+	//n.rendezvousAssocMu.Lock()
+	peerCircID, isRendezvous := n.rendezvousAssoc[cell.CircID]
+	//n.rendezvousAssocMu.Unlock()
+	log.Debug().Msgf("Handling relay cell with CircID %d from %s", cell.CircID, src)
+	if isRendezvous {
+		log.Debug().Msg("Will forward relay cell at rendezvous point")
+		// Look up the peer circuit using (PrevHop, InCircID)
+		n.circuitsMu.RLock()
+		var peerKey *circuitKey
+		for k := range n.circuits {
+			if k.InCircID == peerCircID {
+				keyCopy := k // avoid loop variable capture
+				peerKey = &keyCopy
+				break
+			}
+		}
+		n.circuitsMu.RUnlock()
+
+		if peerKey == nil {
+			return fmt.Errorf("rendezvous peer circuit %d not found", peerCircID)
+		}
+
+		n.log.Debug().
+			Uint16("fromCircID", cell.CircID).
+			Uint16("toCircID", peerCircID).
+			Str("toHop", peerKey.PrevHop).
+			Msg("Forwarding relay cell at rendezvous point")
+
+		// Rewrite circuit ID for the receiving side
+		cell.CircID = peerKey.InCircID
+
+		// Blind forward to the other circuit's previous hop
+		return n.SendCell(peerKey.PrevHop, cell)
+	}
+
+	// Check if this is for a client circuit (OP receiving relay cells)
 	n.clientCircuitsMu.RLock()
 	cc, isClientCircuit := n.clientCircuits[cell.CircID]
 	n.clientCircuitsMu.RUnlock()
