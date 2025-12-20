@@ -666,6 +666,14 @@ func (n *node) HandleRelayHSDirPublish(relay RelayCell, circ *Circuit) error {
 		Msg("HSDir received descriptor publish")
 
 	n.hsDirMu.Lock()
+	existing, ok := n.hsDirStore[desc.ServiceID]
+
+	if ok {
+		if !desc.ExpiresAt.After(existing.ExpiresAt) {
+			return fmt.Errorf("HSDir descriptor already exists and is valid")
+		}
+	}
+
 	n.hsDirStore[desc.ServiceID] = desc
 	n.hsDirMu.Unlock()
 
@@ -1180,6 +1188,17 @@ func (n *node) HandleRelayHSDirDelete(relay RelayCell, circ *Circuit) error {
 		Msg("HSDir received delete request for service")
 
 	n.hsDirMu.Lock()
+	stored := n.hsDirStore[desc.ServiceID]
+
+	if stored == nil {
+		n.hsDirMu.Unlock()
+		return nil
+	}
+
+	if !bytes.Equal(stored.ServicePubKey, desc.ServicePubKey) {
+		return fmt.Errorf("delete public key mismatch")
+	}
+
 	delete(n.hsDirStore, desc.ServiceID)
 	n.hsDirMu.Unlock()
 
