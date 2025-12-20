@@ -378,15 +378,3 @@ func Test_TOR_Data_Multiple_Streams_Single_Circuit(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 	_ = client.DestroyCircuit(circID)
 }
-
-// TODO: Tampering test is commented out because digest verification is not fully working yet
-/*
-func Test_TOR_Data_Transfer_Tampering(t *testing.T) {
-	// This test would verify that data tampering is detected
-	// Expected behavior:
-	// 1. Client sends data
-	// 2. Relay tampers with encrypted payload
-	// 3. Exit detects digest mismatch and rejects
-	// 4. Client does not receive corrupted data
-}
-*/

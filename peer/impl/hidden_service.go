@@ -287,6 +287,7 @@ func (n *node) GenerateMsgID() (uint16, error) {
 }
 
 // EncodeFragment encodes a FragmentHeader and a chunk of data into a relay payload
+// Function written with the help of ChatGPT
 func EncodeFragment(h FragmentHeader, chunk []byte) ([]byte, error) {
 	buf := bytes.NewBuffer(make([]byte, 0, FragmentHeaderLen+len(chunk)))
 	if err := binary.Write(buf, binary.BigEndian, h.MsgID); err != nil {
@@ -303,6 +304,7 @@ func EncodeFragment(h FragmentHeader, chunk []byte) ([]byte, error) {
 }
 
 // DecodeFragment decodes a relay payload into a FragmentHeader and a chunk of data
+// Function written with the help of ChatGPT
 func DecodeFragment(b []byte) (FragmentHeader, []byte, error) {
 	if len(b) < FragmentHeaderLen {
 		return FragmentHeader{}, nil, fmt.Errorf("fragment too short")
@@ -323,6 +325,7 @@ func DecodeFragment(b []byte) (FragmentHeader, []byte, error) {
 }
 
 // SplitPayload splits a payload into chunks of a given size
+// Function written with the help of ChatGPT
 func SplitPayload(payload []byte, maxChunk int) [][]byte {
 	if maxChunk <= 0 {
 		return nil
@@ -339,6 +342,7 @@ func SplitPayload(payload []byte, maxChunk int) [][]byte {
 }
 
 // AddFragment adds a chunk of data to a fragment buffer
+// Function written with the help of ChatGPT
 func (n *node) AddFragment(circID, msgID, idx, total uint16, chunk []byte) ([]byte, bool, error) {
 	n.hsdirFragMu.Lock()
 	defer n.hsdirFragMu.Unlock()
@@ -480,6 +484,7 @@ func (n *node) SendFragments(frags [][]byte,
 }
 
 // EncodeServiceDescriptor encodes a service descriptor into a relay payload
+// Function written with the help of ChatGPT
 func EncodeServiceDescriptor(desc *ServiceDescriptor) ([]byte, error) {
 	buf := bytes.NewBuffer(nil)
 
@@ -546,6 +551,7 @@ func EncodeServiceDescriptor(desc *ServiceDescriptor) ([]byte, error) {
 }
 
 // DecodeServiceDescriptor decodes a relay payload into a service descriptor
+// Function written with the help of ChatGPT
 func DecodeServiceDescriptor(b []byte) (*ServiceDescriptor, error) {
 	r := bytes.NewReader(b)
 	desc := &ServiceDescriptor{}
@@ -1005,6 +1011,7 @@ func (n *node) BuildServiceDescriptor(serviceID string,
 }
 
 // VerifyServiceDescriptor verifies the signature of a service descriptor
+// Function written with the help of ChatGPT
 func (n *node) VerifyServiceDescriptor(desc *ServiceDescriptor) error {
 	// ServiceID from the public key
 	h := sha256.Sum256(desc.ServicePubKey)
@@ -1748,14 +1755,27 @@ func (n *node) SendIntroduce1Message(circID uint16, serviceID string,
 		return fmt.Errorf("failed to encrypt payload: %w", err)
 	}
 
-	// Prepare the IPIntroduceMessage for the introduction point
+	return n.SendIntroduce1Relay(cc, circID, serviceID, cryptoStates, encryptedPayload)
+}
+
+// SendIntroduce1Relay is a helper function to SendIntroduce1Message that sends the relay cell to the introduction point
+// SendIntroduce1Message was refactored with the help of ChatGPT
+func (n *node) SendIntroduce1Relay(
+	cc *ClientCircuit,
+	circID uint16,
+	serviceID string,
+	cryptoStates []*CircuitCryptoState,
+	encryptedBlob []byte,
+) error {
+
 	ipIntroMsg := &IPIntroduceMessage{
 		ServiceID:     serviceID,
-		EncryptedBlob: encryptedPayload,
+		EncryptedBlob: encryptedBlob,
 	}
+
 	ipPayload, err := EncodeIPIntroduceMessage(ipIntroMsg)
 	if err != nil {
-		return fmt.Errorf("failed to encode IP introduce message: %w", err)
+		return fmt.Errorf("failed to encode IP introduce: %w", err)
 	}
 
 	cc.CryptoMu.Lock()
@@ -1766,13 +1786,13 @@ func (n *node) SendIntroduce1Message(circID uint16, serviceID string,
 	}
 
 	relay := RelayCell{
-		CircID:   circID,
-		StreamID: 0,
-		Command:  RelayIntroduce1,
-		Digest:   digest,
-		Length:   uint16(len(encrypted)),
-		Data:     encrypted,
+		CircID:  circID,
+		Command: RelayIntroduce1,
+		Digest:  digest,
+		Length:  uint16(len(encrypted)),
+		Data:    encrypted,
 	}
+
 	cell, err := n.EncodeRelayCell(relay)
 	if err != nil {
 		return fmt.Errorf("failed to encode relay cell: %w", err)
@@ -2050,22 +2070,7 @@ func (n *node) SendRelayRendezvous1(circID uint16,
 	}
 
 	// Build circuit to the rendezvous point
-	excludes := make([]string, 0, 1+len(introPoints))
-	excludes = append(excludes, rendezvousAddr)
-	excludes = append(excludes, introPoints...)
-	middleHops, err := n.BuildRandomPath(2, excludes...)
-	if err != nil {
-		return fmt.Errorf("failed to build random path: %w", err)
-	}
-
-	n.log.Info().
-		Str("rpAddr", rendezvousAddr).
-		Msg("Building circuit to rendezvous point")
-
-	hops := make([]string, 0, len(middleHops)+1)
-	hops = append(hops, middleHops...)
-	hops = append(hops, rendezvousAddr)
-	rpCircID, err := n.BuildCircuit(hops, 5*time.Second)
+	rpCircID, err := n.BuildCircuitToRP(rendezvousAddr, introPoints)
 
 	if err != nil {
 		return fmt.Errorf("failed to build circuit to RP: %w", err)
@@ -2141,6 +2146,31 @@ func (n *node) SendRelayRendezvous1(circID uint16,
 	return n.SendCell(cc.Hops[0], cell, cc)
 }
 
+// BuildCircuitToRP builds a circuit from the service node to the RP node
+func (n *node) BuildCircuitToRP(rendezvousAddr string, introPoints []string) (uint16, error) {
+	// Build circuit to the rendezvous point
+	excludes := make([]string, 0, 1+len(introPoints))
+	excludes = append(excludes, rendezvousAddr)
+	excludes = append(excludes, introPoints...)
+	middleHops, err := n.BuildRandomPath(2, excludes...)
+	if err != nil {
+		return uint16(0), fmt.Errorf("failed to build random path: %w", err)
+	}
+
+	n.log.Info().
+		Str("rpAddr", rendezvousAddr).
+		Msg("Building circuit to rendezvous point")
+
+	hops := make([]string, 0, len(middleHops)+1)
+	hops = append(hops, middleHops...)
+	hops = append(hops, rendezvousAddr)
+	rpCircID, err := n.BuildCircuit(hops, 5*time.Second)
+
+	return rpCircID, err
+}
+
+// HandleRelayRendezvous1 handles a rendezvous1 relay cell received at the rendezvous point, whose job is to forward
+// this message as a RENDEZVOUS2 relay cell to the client node
 func (n *node) HandleRelayRendezvous1(relay RelayCell, circ *Circuit) error {
 	n.log.Info().
 		Uint16("circID", relay.CircID).

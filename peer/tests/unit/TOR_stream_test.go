@@ -151,12 +151,12 @@ func Test_TOR_Multiple_Streams_On_Same_Circuit(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 
 	// Both streams must exist
-	require.True(t, client.Peer.ContainsStream(circID, stream1))
-	require.True(t, client.Peer.ContainsStream(circID, stream2))
+	require.True(t, client.Peer.HasStream(circID, stream1))
+	require.True(t, client.Peer.HasStream(circID, stream2))
 
 	exitID := getExitCircuitIDWithStreams(t, exit)
-	require.True(t, exit.Peer.ContainsStream(exitID, stream1))
-	require.True(t, exit.Peer.ContainsStream(exitID, stream2))
+	require.True(t, exit.Peer.HasStream(exitID, stream1))
+	require.True(t, exit.Peer.HasStream(exitID, stream2))
 }
 
 func Test_TOR_Multiple_Streams_With_Single_Close(t *testing.T) {
@@ -195,10 +195,10 @@ func Test_TOR_Multiple_Streams_With_Single_Close(t *testing.T) {
 	require.False(t, client.Peer.HasStream(circID, stream4))
 
 	// stream1 and stream4 should be gone, stream2 and stream3 should remain on exit
-	require.False(t, exit.Peer.ContainsStream(exitID, stream1))
-	require.True(t, exit.Peer.ContainsStream(exitID, stream2))
-	require.True(t, exit.Peer.ContainsStream(exitID, stream3))
-	require.False(t, exit.Peer.ContainsStream(exitID, stream4))
+	require.False(t, exit.Peer.HasStream(exitID, stream1))
+	require.True(t, exit.Peer.HasStream(exitID, stream2))
+	require.True(t, exit.Peer.HasStream(exitID, stream3))
+	require.False(t, exit.Peer.HasStream(exitID, stream4))
 }
 
 // If exit node fails to create socket, stream should immediately close

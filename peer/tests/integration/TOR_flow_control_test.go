@@ -212,7 +212,7 @@ func Test_TOR_FlowControl_Disabled_PacketLoss(t *testing.T) {
 
 	z.PopulateOnionKeys(nodes)
 
-	hops := [3]string{guard.GetAddr(), middle.GetAddr(), exit.GetAddr()}
+	hops := []string{guard.GetAddr(), middle.GetAddr(), exit.GetAddr()}
 	circID, err := client.BuildCircuit(hops, 30*time.Second)
 	require.NoError(t, err)
 
@@ -286,7 +286,7 @@ func Test_TOR_FlowControl_Enabled_NoPacketLoss(t *testing.T) {
 
 	z.PopulateOnionKeys(nodes)
 
-	hops := [3]string{guard.GetAddr(), middle.GetAddr(), exit.GetAddr()}
+	hops := []string{guard.GetAddr(), middle.GetAddr(), exit.GetAddr()}
 	circID, err := client.BuildCircuit(hops, 30*time.Second)
 	require.NoError(t, err)
 
@@ -375,8 +375,8 @@ func Test_TOR_FlowControl_SharedMiddle_TwoClients(t *testing.T) {
 	z.PopulateOnionKeys(nodes)
 
 	// Build circuits with shared middle
-	hops1 := [3]string{guard1.GetAddr(), middle.GetAddr(), exit1.GetAddr()}
-	hops2 := [3]string{guard2.GetAddr(), middle.GetAddr(), exit2.GetAddr()}
+	hops1 := []string{guard1.GetAddr(), middle.GetAddr(), exit1.GetAddr()}
+	hops2 := []string{guard2.GetAddr(), middle.GetAddr(), exit2.GetAddr()}
 
 	circID1, err := client1.BuildCircuit(hops1, 30*time.Second)
 	require.NoError(t, err, "Client1 failed to build circuit")

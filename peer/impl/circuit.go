@@ -1923,28 +1923,6 @@ func (n *node) HasStream(circID, streamID uint16) bool {
 	return exists
 }
 
-// ContainsStream reports whether a relay circuit contains a given stream
-func (n *node) ContainsStream(circID, streamID uint16) bool {
-	n.streamsMu.RLock()
-	defer n.streamsMu.RUnlock()
-
-	table, ok := n.streamTables[circID]
-	if !ok {
-		n.log.Debug().
-			Uint16("circID", circID).
-			Uint16("streamID", streamID).
-			Msg("ContainsStream: no stream table for circuit")
-		return false
-	}
-	_, exists := table.Streams[streamID]
-	n.log.Debug().
-		Uint16("circID", circID).
-		Uint16("streamID", streamID).
-		Bool("exists", exists).
-		Msg("ContainsStream check result")
-	return exists
-}
-
 // HasStreams returns the number of streams for a client circuit
 func (n *node) HasStreams(circID uint16) (uint16, error) {
 	n.streamsMu.RLock()

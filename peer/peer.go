@@ -71,10 +71,6 @@ type TorStreams interface {
 	// HasStream reports whether a stream exists for a given circuit (client side)
 	HasStream(circID, streamID uint16) bool
 
-	// ContainsStream reports whether a relay circuit contains a given stream (relay/exit side)
-	// TODO: This function serves no purpose and should be removed. HasStream does the same thing.
-	ContainsStream(circID, streamID uint16) bool
-
 	// HasStreams reports whether a circuit has any stream or is empty
 	HasStreams(circID uint16) (uint16, error)
 
