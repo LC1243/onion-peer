@@ -63,6 +63,9 @@ test_bench_hw3_tlc:
 test_bench_hw3_consensus:
 	@GLOG=no go test -v ${JSONIFY} -timeout 12m -run Test_HW3_BenchmarkConsensus -v -count 1 --tags=performance -benchtime=${BENCHTIME} ./peer/tests/perf/ || true
 
+test_perf_tor:
+	@GLOG=no go test -v ${JSONIFY} -timeout 30m -run Test_Plot_And_Benchmark_TOR_Circuits -v -count 1 --tags=performance ./peer/tests/perf/ || true
+
 
 lint:
 	# Coding style static check.
