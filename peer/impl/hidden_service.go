@@ -2116,7 +2116,26 @@ func (n *node) SendRelayRendezvous1(circID uint16,
 	cc := n.clientCircuits[rpCircID]
 	n.clientCircuitsMu.RUnlock()
 
-	return n.SendCell(cc.Hops[0], cell, cc)
+	err = n.SendCell(cc.Hops[0], cell, cc)
+	if err != nil {
+		return err
+	}
+
+	// Derive circuit crypto keys for Bob's side
+	cryptoState, err := generateCircuitKeys(sharedSecret)
+	if err != nil {
+		return fmt.Errorf("failed to generate circuit keys from shared secret: %w", err)
+	}
+
+	n.cryptoStatesMu.Lock()
+	n.circuitCryptoStates[rpCircID] = append(n.circuitCryptoStates[rpCircID], cryptoState)
+	n.cryptoStatesMu.Unlock()
+
+	n.log.Info().
+		Uint16("rpCircID", rpCircID).
+		Msg("Added shared crypto state to Bob's RP circuit for rendezvous")
+
+	return nil
 }
 
 func (n *node) HandleRelayRendezvous1(relay RelayCell, circ *Circuit) error {
