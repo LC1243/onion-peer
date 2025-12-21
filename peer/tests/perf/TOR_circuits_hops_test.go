@@ -19,6 +19,7 @@ import (
 )
 
 const (
+	Runs              = 3
 	ThroughputPackets = 1000
 	LatencyPackets    = 500
 	PayloadSize       = 300
@@ -84,33 +85,38 @@ func BuildNHopCircuit(t *testing.T, n int) (client z.TestNode, relays []z.TestNo
 	return client, relays, exit, circID
 }
 
-// If you want to plot the results, run this test
 func Test_Plot_And_Benchmark_TOR_Circuits(t *testing.T) {
+	var latencyRuns []map[int]float64
+	var throughputRuns []map[int]float64
+
+	for i := 1; i <= Runs; i++ {
+		t.Logf("Latency benchmark run %d/%d", i, Runs)
+		latencyRuns = append(latencyRuns, RunBenchmarkLatency(t))
+
+		t.Logf("Throughput benchmark run %d/%d", i, Runs)
+		throughputRuns = append(throughputRuns, RunBenchmarkThroughput(t))
+	}
+
+	avgLatency := AverageResults(latencyRuns)
+	avgThroughput := AverageResults(throughputRuns)
+
+	PrintResults("Average Latency Results", avgLatency, "ms")
+	PrintResults("Average Throughput Results", avgThroughput, "kB/s")
+
 	if !plotFlag {
 		t.Skip("plotting disabled (set PLOT=1 to enable)")
 	}
 
-	latencyMap := RunBenchmarkLatency(t)
-	t.Logf("Latency benchmark finished running")
-	ThroughputMap := RunBenchmarkThroughput(t)
-	t.Logf("Throughput benchmark finished running")
-
-	t.Logf("Plotting results")
-	require.NoError(t, PlotResults(latencyMap, "latency"))
-	require.NoError(t, PlotResults(ThroughputMap, "throughput"))
-}
-
-func Benchmark_TOR_Circuits(b *testing.B) {
-	//RunBenchmarkLatency(b)
-	b.Logf("Latency benchmark finished running")
-	//RunBenchmarkThroughput(b)
-	b.Logf("Throughput benchmark finished running")
+	t.Logf("Plotting averaged results")
+	require.NoError(t, PlotResults(avgLatency, "latency"))
+	require.NoError(t, PlotResults(avgThroughput, "throughput"))
 }
 
 func RunBenchmarkLatency(b *testing.T) map[int]float64 {
 	results := make(map[int]float64)
 
 	for hops := MinHops; hops <= MaxHops; hops++ {
+		start := time.Now()
 		client, _, _, circID := BuildNHopCircuit(b, hops)
 
 		streamID, err := client.Peer.OpenStream(circID, "latency:test")
@@ -123,7 +129,6 @@ func RunBenchmarkLatency(b *testing.T) map[int]float64 {
 		time.Sleep(300 * time.Millisecond)
 
 		for i := 0; i < LatencyPackets; i++ {
-			start := time.Now()
 
 			err = client.Peer.SendStreamData(circID, streamID, payload)
 			require.NoError(b, err)
@@ -136,9 +141,9 @@ func RunBenchmarkLatency(b *testing.T) map[int]float64 {
 				}
 				time.Sleep(1 * time.Millisecond)
 			}
-			total += time.Since(start)
 		}
 
+		total = time.Since(start)
 		avgMs := float64(total.Milliseconds()) / LatencyPackets
 		results[hops] = avgMs
 
@@ -157,9 +162,17 @@ func RunBenchmarkThroughput(b *testing.T) map[int]float64 {
 		streamID, err := client.Peer.OpenStream(circID, "throughput:test")
 		require.NoError(b, err)
 
-		payload := make([]byte, PayloadSize)
+		ready := false
+		for k := 0; k < 50; k++ {
+			if client.Peer.HasStream(circID, streamID) {
+				ready = true
+				break
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+		require.True(b, ready, "Stream failed to open")
 
-		// Warm-up
+		payload := make([]byte, PayloadSize)
 		time.Sleep(300 * time.Millisecond)
 
 		start := time.Now()
@@ -171,12 +184,12 @@ func RunBenchmarkThroughput(b *testing.T) map[int]float64 {
 				}
 				time.Sleep(5 * time.Millisecond)
 			}
-			time.Sleep(100 * time.Microsecond)
+			time.Sleep(3 * time.Millisecond)
 		}
 
 		// Wait for all echos
 		timeout := time.After(10 * time.Second)
-		ticker := time.NewTicker(50 * time.Millisecond)
+		ticker := time.NewTicker(500 * time.Millisecond)
 		defer ticker.Stop()
 
 		var finalReceived int
@@ -249,4 +262,38 @@ func PlotResults(results map[int]float64, plotType string) error {
 
 	filename := fmt.Sprintf("%s/%s_vs_hops.png", outDir, plotType)
 	return p.Save(6*vg.Inch, 4*vg.Inch, filename)
+}
+
+func AverageResults(runs []map[int]float64) map[int]float64 {
+	avg := make(map[int]float64)
+
+	if len(runs) == 0 {
+		return avg
+	}
+
+	for _, run := range runs {
+		for hops, value := range run {
+			avg[hops] += value
+		}
+	}
+
+	for hops := range avg {
+		avg[hops] /= float64(len(runs))
+	}
+
+	return avg
+}
+
+func PrintResults(title string, results map[int]float64, unit string) {
+	fmt.Printf("\n=== %s ===\n", title)
+
+	keys := make([]int, 0, len(results))
+	for k := range results {
+		keys = append(keys, k)
+	}
+	sort.Ints(keys)
+
+	for _, hops := range keys {
+		fmt.Printf("Hops: %2d -> %.2f %s\n", hops, results[hops], unit)
+	}
 }

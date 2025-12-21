@@ -28,7 +28,7 @@ make test_int_tor
 
 - performance tests: 
 ```sh
-make test_perf_tor
+make test_bench_tor
 ```
 
 You can also just run `make` to run all the tests, but it will also run the tests for homeworks 0 and 1.
@@ -37,7 +37,7 @@ You can also just run `make` to run all the tests, but it will also run the test
 If you wish to reproduce the results of the performance tests, you can run: 
 
 ```sh
-make FIXME
+make test_reproduce_tor
 ```
 
 ## Code Coverage
