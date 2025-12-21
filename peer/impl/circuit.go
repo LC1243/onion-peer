@@ -345,6 +345,9 @@ func (n *node) HandleRelayAsOP(cell Cell, src string, cc *ClientCircuit) error {
 	case RelayRendezvous2:
 		return n.HandleRelayRendezvous2(relayCell)
 	default:
+		n.log.Error().
+			Int("command", int(relayCell.Command)).
+			Msg("unexpected relay command for client circuit") // This is the only thing that helped in debugging a big issue in Hidden Service
 		return fmt.Errorf("unexpected relay command %d for client circuit", relayCell.Command)
 	}
 }
