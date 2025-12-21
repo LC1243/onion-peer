@@ -344,6 +344,9 @@ func (n *node) HandleRelayAsOP(cell Cell, src string, cc *ClientCircuit) error {
 		return n.HandleRelayIntroduce2(relayCell)
 	case RelayRendezvous2:
 		return n.HandleRelayRendezvous2(relayCell)
+	case RelayBegin:
+		// Hidden service (Bob) receiving RELAY_BEGIN from client (Alice) over rendezvous circuit
+		return n.HandleRelayBeginAsOP(relayCell, cc)
 	default:
 		n.log.Error().
 			Int("command", int(relayCell.Command)).
@@ -1174,6 +1177,152 @@ func (n *node) HandleRelayExtendedAsOP(relayCell RelayCell) error {
 	default:
 		return fmt.Errorf("unexpected RelayExtended in state %d", cc.State)
 	}
+}
+
+// HandleRelayBeginAsOP handles a RELAY_BEGIN when acting as Bob in hidden services
+// RelayBegin is reaching Bob .
+// But Bob is a client node and does not expect to receive RelayBegin messages.
+// It only expects RelayConnected messages.
+// But with hidden services, Bob is technically a Server (Exit) node.
+// So there should be a way to process RelayBegin at Clients and send back RelayConnected back to Alice.
+func (n *node) HandleRelayBeginAsOP(relay RelayCell, cc *ClientCircuit) error {
+	n.log.Info().
+		Uint16("circID", cc.CircID).
+		Uint16("streamID", relay.StreamID).
+		Str("targetAddr", string(relay.Data)).
+		Msg("Handling RelayBegin as Bob in HS")
+
+	// Decrypt the relay cell data through all crypto layers
+	n.cryptoStatesMu.Lock()
+	cryptoStates := n.circuitCryptoStates[cc.CircID]
+	n.cryptoStatesMu.Unlock()
+
+	if len(cryptoStates) == 0 {
+		return fmt.Errorf("no crypto states for circuit %d", cc.CircID)
+	}
+
+	// Decrypt through all layers
+	plaintext := decryptRelayDataAtClient(cryptoStates, relay.Data)
+
+	// Open a brand new UDP socket using your transport layer
+	transportSocket := udpFac()
+	socket, err := transportSocket.CreateSocket(":0")
+	if err != nil {
+		n.log.Error().
+			Err(err).
+			Uint16("circID", cc.CircID).
+			Uint16("streamID", relay.StreamID).
+			Msg("Hidden service failed to open socket. Sending RelayEnd")
+		return n.SendRelayEndAsOP(cc.CircID, relay.StreamID)
+	}
+
+	stream := &Stream{
+		ID:            relay.StreamID,
+		CircID:        cc.CircID,
+		State:         StreamOpen,
+		TargetAddr:    string(plaintext),
+		Sock:          socket,
+		PackageWindow: DefaultStreamWindowSize,
+		DeliverWindow: DefaultStreamWindowSize,
+	}
+	stream.WindowCond = sync.NewCond(&stream.mu)
+
+	n.AddStream(cc.CircID, stream)
+	n.log.Info().
+		Uint16("circID", cc.CircID).
+		Uint16("streamID", relay.StreamID).
+		Msg("Hidden service added stream to rendezvous circuit")
+
+	// Send RELAY_CONNECTED back to Alice
+	return n.SendRelayConnectedAsOP(cc, relay.StreamID)
+}
+
+// SendRelayConnectedAsOP sends RELAY_CONNECTED from Bob back to Alice
+func (n *node) SendRelayConnectedAsOP(cc *ClientCircuit, streamID uint16) error {
+	n.log.Info().
+		Uint16("circID", cc.CircID).
+		Uint16("streamID", streamID).
+		Msg("Sending RelayConnected as Bob")
+
+	n.cryptoStatesMu.Lock()
+	cryptoStates := n.circuitCryptoStates[cc.CircID]
+	n.cryptoStatesMu.Unlock()
+
+	if len(cryptoStates) == 0 {
+		return fmt.Errorf("no crypto states for circuit %d", cc.CircID)
+	}
+
+	// Encrypt through all crypto layers
+	encrypted, digest, err := EncryptRelayCellThroughCircuit(cryptoStates, []byte{})
+	if err != nil {
+		n.log.Error().
+			Err(err).
+			Uint16("circID", cc.CircID).
+			Uint16("streamID", streamID).
+			Msg("Failed to encrypt RelayConnected payload")
+		return err
+	}
+
+	relayCell := RelayCell{
+		CircID:   cc.CircID,
+		StreamID: streamID,
+		Command:  RelayConnected,
+		Digest:   digest,
+		Length:   uint16(len(encrypted)),
+		Data:     encrypted,
+	}
+
+	cell, err := n.EncodeRelayCell(relayCell)
+	if err != nil {
+		return err
+	}
+
+	n.log.Info().
+		Uint16("circID", cc.CircID).
+		Uint16("streamID", streamID).
+		Msg("RelayConnected sent successfully from Bob")
+
+	return n.SendCell(cc.Hops[0], cell, cc)
+}
+
+// SendRelayEndAsOP sends RELAY_END from Bob
+func (n *node) SendRelayEndAsOP(circID, streamID uint16) error {
+	n.clientCircuitsMu.RLock()
+	cc, ok := n.clientCircuits[circID]
+	n.clientCircuitsMu.RUnlock()
+
+	if !ok {
+		return fmt.Errorf("circuit %d not found", circID)
+	}
+
+	n.cryptoStatesMu.Lock()
+	cryptoStates := n.circuitCryptoStates[circID]
+	n.cryptoStatesMu.Unlock()
+
+	if len(cryptoStates) == 0 {
+		return fmt.Errorf("no crypto states for circuit %d", circID)
+	}
+
+	encrypted, digest, err := EncryptRelayCellThroughCircuit(cryptoStates, []byte{})
+	if err != nil {
+		return err
+	}
+
+	relayCell := RelayCell{
+		CircID:   circID,
+		StreamID: streamID,
+		Command:  RelayEnd,
+		Digest:   digest,
+		Length:   uint16(len(encrypted)),
+		Data:     encrypted,
+	}
+
+	cell, err := n.EncodeRelayCell(relayCell)
+	if err != nil {
+		return err
+	}
+
+	return n.SendCell(cc.Hops[0], cell, cc)
 }
 
 // HandleRelayConnectedAsOP sets the stream as open
