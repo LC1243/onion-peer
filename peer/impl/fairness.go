@@ -40,8 +40,8 @@ type CircuitScheduler struct {
 func NewCircuitScheduler(n *node) *CircuitScheduler {
 	return &CircuitScheduler{
 		node:          n,
-		interactiveCh: make(chan queuedPacket, 2000), // Buffer size
-		bulkCh:        make(chan queuedPacket, 2000),
+		interactiveCh: make(chan queuedPacket, 5000), // Buffer size
+		bulkCh:        make(chan queuedPacket, 5000),
 		stopCh:        make(chan struct{}),
 	}
 }

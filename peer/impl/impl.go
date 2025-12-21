@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -21,13 +22,14 @@ import (
 func NewPeer(conf peer.Configuration) peer.Peer {
 	// Initialize the node with its configuration.
 	n := &node{
-		conf:              conf,
-		stopCh:            make(chan struct{}),
-		stopped:           make(chan struct{}),
-		routing:           map[string]string{},
-		congestionControl: true,
-		packetCh:          make(chan transport.Packet, 2000),
+		conf:     conf,
+		stopCh:   make(chan struct{}),
+		stopped:  make(chan struct{}),
+		routing:  map[string]string{},
+		packetCh: make(chan transport.Packet, 2000),
 	}
+	// Set congestion control default (atomic)
+	n.congestionControl.Store(true)
 	// Configure logger: disabled if GLOG=="no", else enabled at info level to console
 	level := zerolog.InfoLevel
 	if os.Getenv("GLOG") == "no" {
@@ -54,7 +56,6 @@ func NewPeer(conf peer.Configuration) peer.Peer {
 	n.clientCircuits = make(map[uint16]*ClientCircuit)
 	n.streamTables = make(map[uint16]*CircuitStreams)
 	n.pendingStreams = make(map[uint16]map[uint16]*Stream)
-	n.congestionControl = true
 	// Initialize rate limiting token buckets
 	n.writeBucket = NewTokenBucket(DefaultRate, DefaultCapacity)
 	n.readBucket = NewTokenBucket(DefaultRate, DefaultCapacity)
@@ -174,7 +175,7 @@ type node struct {
 	pendingStreams   map[uint16]map[uint16]*Stream
 
 	// Congestion control toggle
-	congestionControl bool
+	congestionControl atomic.Bool
 
 	// Cryptography for Tor-like onion routing
 	onionKey      *OnionKeyPair             // This node's long-term onion keypair
@@ -287,7 +288,22 @@ func (n *node) Start() error {
 func (n *node) listenLoop() {
 	defer n.wg.Done()
 	defer close(n.stopped)
-	defer close(n.packetCh)
+
+	// Create a buffered channel to decouple reading from processing
+	packetCh := make(chan transport.Packet, 2000)
+
+	// Start reader goroutine
+	n.wg.Add(1)
+	go n.packetReaderLoop(packetCh)
+
+	// Process packets
+	n.processPackets(packetCh)
+}
+
+// packetReaderLoop reads packets from the socket and sends them to a channel
+func (n *node) packetReaderLoop(packetCh chan<- transport.Packet) {
+	defer n.wg.Done()
+	defer close(packetCh)
 
 	for {
 		select {
@@ -309,8 +325,20 @@ func (n *node) listenLoop() {
 			continue
 		}
 
+		// Push to channel - non-blocking if buffer isn't full
+		select {
+		case packetCh <- pkt:
+		case <-n.stopCh:
+			return
+		}
+	}
+}
+
+// processPackets processes packets from a channel
+func (n *node) processPackets(packetCh <-chan transport.Packet) {
+	for pkt := range packetCh {
 		// Rate limiting
-		if n.congestionControl {
+		if n.congestionControl.Load() {
 			size := CellSize
 			wait := n.readBucket.Consume(float64(size))
 			if wait > 0 {
@@ -388,7 +416,7 @@ func (n *node) Unicast(dest string, msg transport.Message) error {
 	header := transport.NewHeader(myAddr, myAddr, dest)
 	pkt := transport.Packet{Header: &header, Msg: &msg}
 	//Rate limiting
-	if n.congestionControl {
+	if n.congestionControl.Load() {
 		size := CellSize
 
 		//Check bucket
