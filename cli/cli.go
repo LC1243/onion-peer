@@ -191,7 +191,7 @@ func createRandomCircuit() {
 		relayIndices[i], relayIndices[j] = relayIndices[j], relayIndices[i]
 	})
 
-	hops := [3]string{
+	hops := []string{
 		nodeAddrs[relayIndices[0]],
 		nodeAddrs[relayIndices[1]],
 		nodeAddrs[relayIndices[2]],
@@ -276,7 +276,7 @@ func handleCreateCircuit() {
 		relayIndices[i], relayIndices[j] = relayIndices[j], relayIndices[i]
 	})
 
-	hops := [3]string{
+	hops := []string{
 		nodeAddrs[relayIndices[0]],
 		nodeAddrs[relayIndices[1]],
 		nodeAddrs[relayIndices[2]],
