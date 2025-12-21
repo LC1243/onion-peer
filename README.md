@@ -1,17 +1,61 @@
-# CS438
+# Onion Peer
 
-Homework material for the "Decentralized System Engineering" course.
-
-Provided by the DEDIS lab at EPFL.
+Project for the "Decentralized System Engineering" course.
+Built on top of the homework solutions from Louis Chapuis for the CS-438 course (Homework 0 and 1).
 
 ## AI usage
 
-AI was used to refactor a lot of the code, as well as add comments
+AI was used to refactor a lot of the code, to add comments, and for debugging.
 ## Run the tests
 
-See commands in the Makefile. For example: `make` will build all tests (equivalent to `make all`).
+To run all the `Tor-related` tests (unit and integration), run: 
 
-## Quick setup
+```sh
+make test_tor
+```
+
+You can also run them individually:
+ 
+- unit tests: 
+```sh
+make test_unit_tor
+```
+
+- integration tests: 
+```sh 
+make test_int_tor
+```
+
+- performance tests: 
+```sh
+make test_perf_tor
+```
+
+You can also just run `make` to run all the tests, but it will also run the tests for homeworks 0 and 1.
+### Reproducing the results
+
+If you wish to reproduce the results of the performance tests, you can run: 
+
+```sh
+make FIXME
+```
+
+## Code Coverage
+
+To compute code coverage for our implementation:
+
+```sh
+go test ./peer/tests/...   -coverpkg=./peer/...   -coverprofile=peer.coverage.out
+```
+
+To visualize the coverage in HTML (for example using Firefox):
+
+```sh
+go tool cover -html=peer.coverage.out -o peer_coverage.html
+firefox peer_coverage.html
+```
+
+## Quick setup (CHANGEME TO CLI)
 
 Install go = 1.23.
 
