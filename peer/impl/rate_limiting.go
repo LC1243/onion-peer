@@ -7,12 +7,12 @@ import (
 
 const (
 	// DefaultRate is the default token refill rate (bytes per second).
-	// 100 KB/s
-	DefaultRate = 100000.0
+	// 1 MB/s
+	DefaultRate = 1000000.0
 
 	// DefaultCapacity is the default maximum burst size (bytes).
 	// This should be smaller than typical OS UDP buffer sizes, or channel buffers.
-	// 500 KB
+	// 5 MB
 	DefaultCapacity = DefaultRate * 5.0
 )
 

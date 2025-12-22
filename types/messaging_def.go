@@ -70,3 +70,12 @@ type PrivateMessage struct {
 	// Msg is the private message to be read by the recipients
 	Msg *transport.Message
 }
+
+// ServerData is used for communication between exit nodes and servers.
+type ServerData struct {
+	Type         string // register, forward, reply
+	TargetAddr   string // Target address for registration
+	ServerAddr   string // Server address
+	ConnectionID string // Connection identifier for routing replies
+	Data         []byte // Actual data payload
+}

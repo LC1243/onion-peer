@@ -18,10 +18,10 @@ test_hw3: test_unit_hw3 test_int_hw3
 test_tor: test_unit_tor test_int_tor
 
 test_unit_tor:
-	go test -timeout 5m -v -race -run Test_TOR ./peer/tests/unit
+	go test -timeout 7m -v -race -run Test_TOR ./peer/tests/unit
 
 test_int_tor:
-	go test -timeout 5m -v -race -run Test_TOR ./peer/tests/integration
+	go test -timeout 7m -v -race -run Test_TOR ./peer/tests/integration
 
 test_unit_hw0:
 	go test -timeout 2m -v -race -run Test_HW0 ./peer/tests/unit
@@ -73,3 +73,14 @@ lint:
 vet:
 	go vet ./...
 
+# CLI targets
+cli-build:
+	go build -o tor-cli ./cli/cli.go
+
+cli-run: cli-build
+	./tor-cli
+
+cli-clean:
+	rm -f tor-cli
+
+.PHONY: cli-build cli-run cli-clean

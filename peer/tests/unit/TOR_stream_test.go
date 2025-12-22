@@ -270,6 +270,106 @@ func Test_TOR_Stream_FlowControl(t *testing.T) {
 	}
 }
 
+// Tests bidirectional communication between client and server through the exit node.
+func Test_TOR_Stream_ClientServerCommunication(t *testing.T) {
+	transp := channelFac()
+
+	// Create nodes
+	client := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	guard := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	middle := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	exit := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	server := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+
+	t.Cleanup(func() {
+		client.Stop()
+		guard.Stop()
+		middle.Stop()
+		exit.Stop()
+		server.Stop()
+	})
+
+	// Full mesh routing
+	nodes := []z.TestNode{client, guard, middle, exit, server}
+	for i, n1 := range nodes {
+		for j, n2 := range nodes {
+			if i != j {
+				n1.AddPeer(n2.GetAddr())
+			}
+		}
+	}
+
+	time.Sleep(100 * time.Millisecond)
+
+	// Populate onion keys
+	z.PopulateOnionKeys(nodes)
+
+	// Register server with exit node for target address "host:1111"
+	err := server.Peer.RegisterAsServer(exit.GetAddr(), "host:1111")
+	require.NoError(t, err, "Server should register successfully")
+
+	// Build circuit
+	hops := [3]string{guard.GetAddr(), middle.GetAddr(), exit.GetAddr()}
+	circID, err := client.Peer.BuildCircuit(hops, 5*time.Second)
+	require.NoError(t, err, "Circuit should be built successfully")
+
+	time.Sleep(200 * time.Millisecond)
+
+	// Open stream
+	streamID, err := client.Peer.OpenStream(circID, "host:1111")
+	require.NoError(t, err, "Stream should open successfully")
+
+	// Wait longer for notifications to propagate
+	time.Sleep(1 * time.Second)
+
+	// Client sends message to server
+	clientMessage := []byte("Hi Server, Client this side")
+	err = client.Peer.SendStreamData(circID, streamID, clientMessage)
+	require.NoError(t, err, "Client should send data successfully")
+
+	// Wait for server to receive the message
+	time.Sleep(500 * time.Millisecond)
+
+	// Verify server received the data
+	serverReceivedData, err := server.Peer.GetServerReceivedData(exit.GetAddr())
+	require.NoError(t, err, "Should retrieve server received data")
+	require.Equal(t, len(serverReceivedData), 1, "Server should have received at least one packet")
+	require.Equal(t, clientMessage, serverReceivedData[0], "Server should receive correct message from client")
+
+	// Server sends reply with modified message
+	serverReply := []byte("Hi Client, Server this side")
+	err = server.Peer.ServerSendData(exit.GetAddr(), serverReply)
+	require.NoError(t, err, "Server should send reply successfully")
+
+	// Wait for client to receive the reply
+	timeout := time.After(5 * time.Second)
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-timeout:
+			t.Fatal("Timeout waiting for server reply at client")
+		case <-ticker.C:
+			clientReceivedData, err := client.Peer.GetReceivedStreamPackets(circID, streamID)
+			if err == nil && len(clientReceivedData) >= 2 {
+				// Client receives: 1) echo reply from exit node, 2) server reply
+				// Check if any of the received packets matches the server reply
+				foundServerReply := false
+				for _, packet := range clientReceivedData {
+					if string(packet) == string(serverReply) {
+						foundServerReply = true
+						break
+					}
+				}
+				require.True(t, foundServerReply, "Client should receive server reply: %s", string(serverReply))
+				t.Logf("Client successfully received server reply: %s", string(serverReply))
+				return
+			}
+		}
+	}
+}
+
 // Test_TOR_Multiple_Circuits_Multiple_Streams tests creating multiple circuits
 // with different topologies (non-intersecting and shared middle node) and
 // opening streams on each circuit to verify full functionality.
