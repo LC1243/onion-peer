@@ -18,6 +18,7 @@ type Peer interface {
 	TorSecurity
 	TorRendezvous
 	TorClientIntroduction
+	TorServer
 }
 
 // Tor defines the interface for Tor-like onion routing functionality.
@@ -26,7 +27,7 @@ type Tor interface {
 	// hops must contain exactly 3 addresses: [Guard, Middle, Exit].
 	// Blocks until the circuit is ready or timeout.
 	// Returns the circuit ID on success.
-	BuildCircuit(hops [3]string, timeout time.Duration) (uint16, error)
+	BuildCircuit(hops []string, timeout time.Duration) (uint16, error)
 
 	// GetOnionPublicKey returns this node's public onion key.
 	// Used for Tor-like circuit creation.
@@ -71,10 +72,6 @@ type TorStreams interface {
 	// HasStream reports whether a stream exists for a given circuit (client side)
 	HasStream(circID, streamID uint16) bool
 
-	// ContainsStream reports whether a relay circuit contains a given stream (relay/exit side)
-	// TODO: This function serves no purpose and should be removed. HasStream does the same thing.
-	ContainsStream(circID, streamID uint16) bool
-
 	// HasStreams reports whether a circuit has any stream or is empty
 	HasStreams(circID uint16) (uint16, error)
 
@@ -115,7 +112,7 @@ type TorHiddenServices interface {
 	// CreateHiddenService creates a full hidden service
 	// Create the service locally, establishes intro points by building circuits into them,
 	// and builds a descriptor, which is published to the HSDir, which we already have a circuit to with IntroCircID.
-	CreateHiddenService(introPoints [][3]string,
+	CreateHiddenService(introPoints [][]string,
 		timeout time.Duration,
 		lifetime time.Duration,
 		IntroCircID uint16) (string, []uint16, error)
@@ -218,4 +215,20 @@ type Configuration struct {
 	// is a 50% chance, and 0 no chance.
 	// Default: 0.5
 	ContinueMongering float64
+}
+
+// TorServer defines the interface for server-side operations in the Tor network.
+// TorServer interface for nodes acting as servers behind exit nodes.
+// In Tor, servers are unaware of circuits and streams - they only see regular traffic from exit nodes.
+type TorServer interface {
+	// RegisterAsServer registers this node as a server for the specified target address.
+	// The server will receive data from the exit node when clients connect to targetAddr.
+	RegisterAsServer(exitNodeAddr, targetAddr string) error
+
+	// ServerSendData sends data back to the exit node that contacted this server.
+	// The exit node will forward it to the appropriate client circuit/stream.
+	ServerSendData(exitNodeAddr string, data []byte) error
+
+	// GetServerReceivedData returns data received from a specific exit node for testing.
+	GetServerReceivedData(exitNodeAddr string) ([][]byte, error)
 }

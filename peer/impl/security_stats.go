@@ -2,6 +2,8 @@ package impl
 
 import "sync"
 
+// Security stats added using copilot assistance
+
 // SecurityStats tracks security-related events for profiling and testing
 type SecurityStats struct {
 	DigestMismatches      uint64 // Total digest mismatches detected

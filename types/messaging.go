@@ -186,6 +186,29 @@ func (p PrivateMessage) HTML() string {
 }
 
 // -----------------------------------------------------------------------------
+// ServerData
+
+// NewEmpty implements types.Message.
+func (s ServerData) NewEmpty() Message {
+	return &ServerData{}
+}
+
+// Name implements types.Message.
+func (s ServerData) Name() string {
+	return "serverdata"
+}
+
+// String implements types.Message.
+func (s ServerData) String() string {
+	return fmt.Sprintf("ServerData{type:%s, connID:%s, dataLen:%d}", s.Type, s.ConnectionID, len(s.Data))
+}
+
+// HTML implements types.Message.
+func (s ServerData) HTML() string {
+	return s.String()
+}
+
+// -----------------------------------------------------------------------------
 // utility functions
 
 // RumorByOrigin sorts rumor by origin

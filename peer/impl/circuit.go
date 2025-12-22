@@ -4,12 +4,15 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
+	"strings"
 	"sync"
 	"time"
 
 	"go.dedis.ch/cs438/transport"
 	"go.dedis.ch/cs438/transport/udp"
 )
+
+// Various debugging refactoring and linting done using copilot
 
 // PacketQueueItem holds a cell waiting to be sent
 type PacketQueueItem struct {
@@ -127,20 +130,20 @@ const (
 type ClientCircuitState int
 
 const (
-	CircuitStateCreating   ClientCircuitState = iota // Waiting for Created from first hop
-	CircuitStateExtending1                           // Waiting for Extended from hop 2
-	CircuitStateExtending2                           // Waiting for Extended from hop 3
-	CircuitStateReady                                // Circuit fully established
-	CircuitStateFailed                               // Circuit creation failed
+	CircuitStateCreating  ClientCircuitState = iota // Waiting for Created from first hop
+	CircuitStateExtending                           // Waiting for Extended from intermediate hop
+	CircuitStateReady                               // Circuit fully established
+	CircuitStateFailed                              // Circuit creation failed
 )
 
 // ClientCircuit represents an OP-initiated circuit through 3 hops
 type ClientCircuit struct {
-	CircID    uint16             // Circuit ID used on the first hop
-	Hops      [3]string          // The 3 relay addresses: Guard, Middle, Exit
-	State     ClientCircuitState // Current state machine state
-	ReadyChan chan struct{}      // Closed when circuit is ready
-	Error     error              // Set if circuit creation fails
+	CircID       uint16             // Circuit ID used on the first hop
+	Hops         []string           // The 3 relay addresses: Guard, Middle, Exit
+	State        ClientCircuitState // Current state machine state
+	ReadyChan    chan struct{}      // Closed when circuit is ready
+	Error        error              // Set if circuit creation fails
+	NextHopIndex int                // Keep track of the next hop
 
 	// Stream-level flow control (end-to-end with Exit)
 	PackageWindow int // Number of cells that can be sent (stream level)
@@ -1032,9 +1035,13 @@ func (n *node) SendCell(dest string, cell Cell, circ ...interface{}) error {
 // BuildCircuit creates a 3-hop circuit through the specified nodes.
 // hops must contain exactly 3 addresses: [Guard, Middle, Exit].
 // Blocks until the circuit is ready or timeout.
-func (n *node) BuildCircuit(hops [3]string, timeout time.Duration) (uint16, error) {
+func (n *node) BuildCircuit(hops []string, timeout time.Duration) (uint16, error) {
 	if n.conf.Socket == nil {
 		return 0, errors.New("socket not initialized")
+	}
+
+	if len(hops) < 3 {
+		return 0, errors.New("circuit must have at least 3 hops")
 	}
 
 	// Generate a unique circuit ID for the first hop
@@ -1060,12 +1067,17 @@ func (n *node) BuildCircuit(hops [3]string, timeout time.Duration) (uint16, erro
 	// Track this circuit ID
 	n.addCircuitID(circID)
 
+	middle := ""
+	if len(hops) > 2 {
+		middle = strings.Join(hops[1:len(hops)-1], ",")
+	}
+
 	n.log.Info().
 		Uint16("circID", circID).
 		Str("guard", hops[0]).
-		Str("middle", hops[1]).
-		Str("exit", hops[2]).
-		Msg("Building 3-hop circuit")
+		Str("middle", middle).
+		Str("exit", hops[len(hops)-1]).
+		Msgf("Building %d-hop circuit", len(hops))
 
 	// Obtain the next hop's public key for encryption
 	// ASSUMPTION: The public onion key is already available in the map
@@ -1175,10 +1187,19 @@ func (n *node) HandleCreatedAsOP(cell Cell, src string) error {
 	// Verify it came from the expected hop
 	if cc.State == CircuitStateCreating && src == cc.Hops[0] {
 		// Guard responded, now extend to Middle
-		cc.State = CircuitStateExtending1
-		n.log.Info().Uint16("circID", cell.CircID).Msg("Guard connected, extending to Middle")
+		cc.State = CircuitStateExtending
+		cc.NextHopIndex = 1
 
-		return n.SendExtendToHop(cc, cc.Hops[1])
+		if cc.NextHopIndex >= len(cc.Hops) {
+			cc.State = CircuitStateReady
+			close(cc.ReadyChan)
+			return nil
+		}
+		n.log.Info().
+			Uint16("circID", cell.CircID).
+			Msgf("Guard connected, extending to Middle %d", cc.NextHopIndex)
+
+		return n.SendExtendToHop(cc, cc.Hops[cc.NextHopIndex])
 	}
 
 	return fmt.Errorf("unexpected Created in state %d from %s", cc.State, src)
@@ -1195,23 +1216,207 @@ func (n *node) HandleRelayExtendedAsOP(relayCell RelayCell) error {
 		return fmt.Errorf("received RelayExtended for unknown client circuit %d", circID)
 	}
 
-	n.log.Info().Uint16("circID", circID).Msg("Handling RelayExtended in OP")
-
-	switch cc.State {
-	case CircuitStateExtending1:
-		// Middle responded, now extend to Exit
-		return n.handleMiddleExtended(circID, cc, relayCell)
-
-	case CircuitStateExtending2:
-		// Exit responded, complete the handshake and circuit is ready!
-		return n.handleExitExtended(circID, cc, relayCell)
-
-	case CircuitStateCreating, CircuitStateReady, CircuitStateFailed:
-		return fmt.Errorf("unexpected RelayExtended in state %d", cc.State)
-
-	default:
+	if cc.State != CircuitStateExtending {
 		return fmt.Errorf("unexpected RelayExtended in state %d", cc.State)
 	}
+
+	n.log.Info().Uint16("circID", circID).Msg("Handling RelayExtended in OP")
+
+	// At this point the Payload of EXTENDED should have the second half of the handshake
+	// So decrypt the payload add complete the handshake
+	cryptoStates := n.circuitCryptoStates[cc.CircID]
+	if len(cryptoStates) == 0 {
+		return fmt.Errorf("no crypto states found for circuit %d", circID)
+	}
+
+	relayExtendedPayloadPlainText := relayCell.Data
+	for i := 0; i < len(cryptoStates); i++ {
+		relayExtendedPayloadPlainText, _ = DecryptRelayCellAtHop(
+			cryptoStates[i],
+			DirectionBackward,
+			relayExtendedPayloadPlainText,
+			[6]byte{},
+		)
+	}
+
+	n.log.Info().
+		Uint16("circID", circID).
+		Msgf("Middle %d Responded, Finishing handshake for Middle", cc.NextHopIndex)
+
+	// Complete the handshake as the initiator for the Middle node
+	circuitCryptoState, err := n.FinishHandshakeAsInitiator(
+		n.diffieHellmanHandshakePairs[cc.CircID],
+		relayExtendedPayloadPlainText,
+	)
+
+	if err != nil {
+		return fmt.Errorf("failed to complete handshake for circuit %d at Middle: %w", circID, err)
+	}
+
+	// Append the middle hop crypto state to the slice
+	n.circuitCryptoStates[cc.CircID] = append(n.circuitCryptoStates[cc.CircID], circuitCryptoState)
+
+	cc.NextHopIndex++
+
+	// Extend again or finish
+	if cc.NextHopIndex < len(cc.Hops) {
+		return n.SendExtendToHop(cc, cc.Hops[cc.NextHopIndex])
+	}
+
+	cc.State = CircuitStateReady
+	n.log.Info().Uint16("circID", circID).Msg("Circuit fully established!")
+	close(cc.ReadyChan)
+	return nil
+}
+
+// HandleRelayConnectedAsOP sets the stream as open
+func (n *node) HandleRelayConnectedAsOP(relay RelayCell, cc *ClientCircuit) error {
+	n.log.Info().
+		Uint16("circID", cc.CircID).
+		Uint16("streamID", relay.StreamID).
+		Bool("isRendezvous", cc.IsRendezvous).
+		Msg("Handling RelayConnected as OP")
+
+	// For rendezvous circuits, decrypt through all layers to synchronize cipher state
+	if cc.IsRendezvous && len(relay.Data) > 0 {
+		n.cryptoStatesMu.Lock()
+		cryptoStates := n.circuitCryptoStates[cc.CircID]
+		n.cryptoStatesMu.Unlock()
+
+		if len(cryptoStates) > 0 {
+			// Decrypt through all layers to keep cipher in sync
+			_ = decryptRelayDataAtClient(cryptoStates, relay.Data)
+		}
+	}
+
+	// First check if this is a pending stream
+	pendingStream := n.getPendingStream(cc.CircID, relay.StreamID)
+	if pendingStream != nil {
+		// Move stream from pending to active
+		n.removePendingStream(cc.CircID, relay.StreamID)
+		pendingStream.mu.Lock()
+		pendingStream.State = StreamOpen
+		pendingStream.mu.Unlock()
+		n.AddStream(cc.CircID, pendingStream)
+
+		n.log.Info().
+			Uint16("circID", cc.CircID).
+			Uint16("streamID", relay.StreamID).
+			Msg("Stream moved from pending to active and is now Open")
+		return nil
+	}
+
+	// Otherwise, check if it's already an active stream (shouldn't normally happen)
+	stream := n.GetStream(cc.CircID, relay.StreamID)
+	if stream == nil {
+		n.log.Error().
+			Uint16("circID", cc.CircID).
+			Uint16("streamID", relay.StreamID).
+			Msg("Received RelayConnected for unknown stream")
+		return fmt.Errorf("unknown stream %d", relay.StreamID)
+	}
+
+	stream.mu.RLock()
+	prevState := stream.State
+	stream.mu.RUnlock()
+
+	n.log.Info().
+		Uint16("circID", cc.CircID).
+		Uint16("streamID", relay.StreamID).
+		Str("previousState", streamStateToString(prevState)).
+		Msg("Stream found, transitioning to Open")
+
+	// receive connected reply, we can now set the stream state as open
+	stream.mu.Lock()
+	stream.State = StreamOpen
+	stream.mu.Unlock()
+	n.log.Info().
+		Uint16("circID", cc.CircID).
+		Uint16("streamID", relay.StreamID).
+		Msg("Stream is now Open and ready for use")
+	return nil
+}
+
+// HandleRelayEndAsOP sets the stream as closed
+func (n *node) HandleRelayEndAsOP(relay RelayCell, cc *ClientCircuit) error {
+	n.log.Info().
+		Uint16("circID", cc.CircID).
+		Uint16("streamID", relay.StreamID).
+		Msg("Handling RelayEnd as OP")
+
+	streams := n.GetCircuitStreams(cc.CircID)
+	stream := streams.Streams[relay.StreamID]
+
+	if stream == nil {
+		n.log.Error().
+			Uint16("circID", cc.CircID).
+			Uint16("streamID", relay.StreamID).
+			Msg("Received RelayEnd for unknown stream")
+		return fmt.Errorf("unknown stream %d", relay.StreamID)
+	}
+
+	stream.mu.RLock()
+	currentState := stream.State
+	stream.mu.RUnlock()
+
+	n.log.Info().
+		Uint16("circID", cc.CircID).
+		Uint16("streamID", relay.StreamID).
+		Str("currentState", streamStateToString(currentState)).
+		Msg("Stream found, processing RelayEnd")
+
+	// TODO: This should've been a relay teardown message instead of a relay end message
+	// Relay teardown is sent if the server failed to open a TCP connection to the target
+	// This creates a single-handshake instead of a two-handshake close
+	// For now, we handle it as a normal RelayEnd
+
+	// Peer asked to close the stream
+	if currentState == StreamWaitingForConnected {
+		n.log.Info().
+			Uint16("circID", cc.CircID).
+			Uint16("streamID", relay.StreamID).
+			Msg("Stream was WaitingForConnected, transitioning to FullyClosed and deleting stream")
+		stream.mu.Lock()
+		stream.State = StreamFullyClosed
+		stream.mu.Unlock()
+		n.DeleteStream(cc.CircID, stream)
+		n.log.Info().
+			Uint16("circID", cc.CircID).
+			Uint16("streamID", relay.StreamID).
+			Msg("Stream fully closed and deleted")
+		return nil
+	}
+
+	if currentState == StreamOpen {
+		n.log.Info().
+			Uint16("circID", cc.CircID).
+			Uint16("streamID", relay.StreamID).
+			Msg("Stream was Open, transitioning to HalfClosedRemote and sending RelayEnd")
+		stream.mu.Lock()
+		stream.State = StreamHalfClosedRemote
+		stream.mu.Unlock()
+		return n.SendRelayEndAsClient(cc.CircID, stream.ID)
+	}
+
+	if currentState == StreamHalfClosedLocal {
+		n.log.Info().
+			Uint16("circID", cc.CircID).
+			Uint16("streamID", relay.StreamID).
+			Msg("Stream was HalfClosedLocal, transitioning to FullyClosed and closing socket")
+		stream.mu.Lock()
+		stream.State = StreamFullyClosed
+		stream.mu.Unlock()
+		if stream.Sock != nil {
+			stream.Sock.Close()
+		}
+		n.DeleteStream(cc.CircID, stream)
+		n.log.Info().
+			Uint16("circID", cc.CircID).
+			Uint16("streamID", relay.StreamID).
+			Msg("Stream fully closed and deleted")
+	}
+
+	return nil
 }
 
 // HandleRelayBeginAsOP handles a RELAY_BEGIN when acting as Bob in hidden services
@@ -1378,237 +1583,6 @@ func (n *node) SendRelayEndAsOP(circID, streamID uint16) error {
 	}
 
 	return n.SendCell(cc.Hops[0], cell, cc)
-}
-
-// handleMiddleExtended processes RELAY_EXTENDED from the middle hop
-func (n *node) handleMiddleExtended(circID uint16, cc *ClientCircuit, relayCell RelayCell) error {
-	n.log.Info().Uint16("circID", circID).Msg("Middle Responded, Finishing handshake for Middle")
-
-	// Decrypt the payload through guard layer
-	cryptoStates := n.circuitCryptoStates[cc.CircID]
-	if len(cryptoStates) == 0 {
-		return fmt.Errorf("no crypto states found for circuit %d", circID)
-	}
-
-	cc.CryptoMu.Lock()
-	relayExtendedPayloadPlainText, _ := DecryptRelayCellAtHop(
-		cryptoStates[0],
-		DirectionBackward,
-		relayCell.Data,
-		[6]byte{}, // dummy digest as verification in backward direction is not needed
-	)
-	cc.CryptoMu.Unlock()
-
-	// Complete the handshake as the initiator for the Middle node
-	circuitCryptoState, err := n.FinishHandshakeAsInitiator(
-		n.diffieHellmanHandshakePairs[cc.CircID],
-		relayExtendedPayloadPlainText,
-	)
-	if err != nil {
-		return fmt.Errorf("failed to complete handshake for circuit %d at Middle: %w", circID, err)
-	}
-
-	// Append the middle hop crypto state to the slice
-	n.circuitCryptoStates[cc.CircID] = append(n.circuitCryptoStates[cc.CircID], circuitCryptoState)
-
-	cc.State = CircuitStateExtending2
-	n.log.Info().Uint16("circID", circID).Msg("Middle connected, extending to Exit")
-	return n.SendExtendToHop(cc, cc.Hops[2])
-}
-
-// handleExitExtended processes RELAY_EXTENDED from the exit hop
-func (n *node) handleExitExtended(circID uint16, cc *ClientCircuit, relayCell RelayCell) error {
-	n.log.Info().Uint16("circID", circID).Msg("Exit Responded, Finishing handshake for Exit")
-
-	// Decrypt the RELAY_EXTENDED payload through the already established hops
-	cryptoStates := n.circuitCryptoStates[cc.CircID]
-	if len(cryptoStates) < 2 {
-		return fmt.Errorf("insufficient crypto states (%d) for circuit %d", len(cryptoStates), circID)
-	}
-
-	// Decrypt through middle and guard layers to get exit's handshake response
-	cc.CryptoMu.Lock()
-	relayExtendedPayloadPlainText, _ := DecryptRelayCellAtHop(
-		cryptoStates[1],
-		DirectionBackward,
-		relayCell.Data,
-		[6]byte{}, // dummy digest
-	)
-
-	relayExtendedPayloadPlainText, _ = DecryptRelayCellAtHop(
-		cryptoStates[0],
-		DirectionBackward,
-		relayExtendedPayloadPlainText,
-		[6]byte{}, // dummy digest
-	)
-	cc.CryptoMu.Unlock()
-
-	// Complete the handshake as the initiator for the Exit node
-	circuitCryptoState, err := n.FinishHandshakeAsInitiator(
-		n.diffieHellmanHandshakePairs[cc.CircID],
-		relayExtendedPayloadPlainText,
-	)
-	if err != nil {
-		return fmt.Errorf("failed to complete handshake for circuit %d at Exit: %w", circID, err)
-	}
-
-	// Append the exit hop crypto state to the slice
-	n.circuitCryptoStates[cc.CircID] = append(n.circuitCryptoStates[cc.CircID], circuitCryptoState)
-
-	cc.State = CircuitStateReady
-	n.log.Info().Uint16("circID", circID).Msg("Circuit fully established!")
-	close(cc.ReadyChan)
-	return nil
-}
-
-// HandleRelayConnectedAsOP sets the stream as open
-func (n *node) HandleRelayConnectedAsOP(relay RelayCell, cc *ClientCircuit) error {
-	n.log.Info().
-		Uint16("circID", cc.CircID).
-		Uint16("streamID", relay.StreamID).
-		Bool("isRendezvous", cc.IsRendezvous).
-		Msg("Handling RelayConnected as OP")
-
-	// For rendezvous circuits, decrypt through all layers to synchronize cipher state
-	if cc.IsRendezvous && len(relay.Data) > 0 {
-		n.cryptoStatesMu.Lock()
-		cryptoStates := n.circuitCryptoStates[cc.CircID]
-		n.cryptoStatesMu.Unlock()
-
-		if len(cryptoStates) > 0 {
-			// Decrypt through all layers to keep cipher in sync
-			_ = decryptRelayDataAtClient(cryptoStates, relay.Data)
-		}
-	}
-
-	// First check if this is a pending stream
-	pendingStream := n.getPendingStream(cc.CircID, relay.StreamID)
-	if pendingStream != nil {
-		// Move stream from pending to active
-		n.removePendingStream(cc.CircID, relay.StreamID)
-		pendingStream.mu.Lock()
-		pendingStream.State = StreamOpen
-		pendingStream.mu.Unlock()
-		n.AddStream(cc.CircID, pendingStream)
-
-		n.log.Info().
-			Uint16("circID", cc.CircID).
-			Uint16("streamID", relay.StreamID).
-			Msg("Stream moved from pending to active and is now Open")
-		return nil
-	}
-
-	// Otherwise, check if it's already an active stream (shouldn't normally happen)
-	stream := n.GetStream(cc.CircID, relay.StreamID)
-	if stream == nil {
-		n.log.Error().
-			Uint16("circID", cc.CircID).
-			Uint16("streamID", relay.StreamID).
-			Msg("Received RelayConnected for unknown stream")
-		return fmt.Errorf("unknown stream %d", relay.StreamID)
-	}
-
-	stream.mu.RLock()
-	prevState := stream.State
-	stream.mu.RUnlock()
-
-	n.log.Info().
-		Uint16("circID", cc.CircID).
-		Uint16("streamID", relay.StreamID).
-		Str("previousState", streamStateToString(prevState)).
-		Msg("Stream found, transitioning to Open")
-
-	// receive connected reply, we can now set the stream state as open
-	stream.mu.Lock()
-	stream.State = StreamOpen
-	stream.mu.Unlock()
-	n.log.Info().
-		Uint16("circID", cc.CircID).
-		Uint16("streamID", relay.StreamID).
-		Msg("Stream is now Open and ready for use")
-	return nil
-}
-
-// HandleRelayEndAsOP sets the stream as closed
-func (n *node) HandleRelayEndAsOP(relay RelayCell, cc *ClientCircuit) error {
-	n.log.Info().
-		Uint16("circID", cc.CircID).
-		Uint16("streamID", relay.StreamID).
-		Msg("Handling RelayEnd as OP")
-
-	streams := n.GetCircuitStreams(cc.CircID)
-	stream := streams.Streams[relay.StreamID]
-
-	if stream == nil {
-		n.log.Error().
-			Uint16("circID", cc.CircID).
-			Uint16("streamID", relay.StreamID).
-			Msg("Received RelayEnd for unknown stream")
-		return fmt.Errorf("unknown stream %d", relay.StreamID)
-	}
-
-	stream.mu.RLock()
-	currentState := stream.State
-	stream.mu.RUnlock()
-
-	n.log.Info().
-		Uint16("circID", cc.CircID).
-		Uint16("streamID", relay.StreamID).
-		Str("currentState", streamStateToString(currentState)).
-		Msg("Stream found, processing RelayEnd")
-
-	// TODO: This should've been a relay teardown message instead of a relay end message
-	// Relay teardown is sent if the server failed to open a TCP connection to the target
-	// This creates a single-handshake instead of a two-handshake close
-	// For now, we handle it as a normal RelayEnd
-
-	// Peer asked to close the stream
-	if currentState == StreamWaitingForConnected {
-		n.log.Info().
-			Uint16("circID", cc.CircID).
-			Uint16("streamID", relay.StreamID).
-			Msg("Stream was WaitingForConnected, transitioning to FullyClosed and deleting stream")
-		stream.mu.Lock()
-		stream.State = StreamFullyClosed
-		stream.mu.Unlock()
-		n.DeleteStream(cc.CircID, stream)
-		n.log.Info().
-			Uint16("circID", cc.CircID).
-			Uint16("streamID", relay.StreamID).
-			Msg("Stream fully closed and deleted")
-		return nil
-	}
-
-	if currentState == StreamOpen {
-		n.log.Info().
-			Uint16("circID", cc.CircID).
-			Uint16("streamID", relay.StreamID).
-			Msg("Stream was Open, transitioning to HalfClosedRemote and sending RelayEnd")
-		stream.mu.Lock()
-		stream.State = StreamHalfClosedRemote
-		stream.mu.Unlock()
-		return n.SendRelayEndAsClient(cc.CircID, stream.ID)
-	}
-
-	if currentState == StreamHalfClosedLocal {
-		n.log.Info().
-			Uint16("circID", cc.CircID).
-			Uint16("streamID", relay.StreamID).
-			Msg("Stream was HalfClosedLocal, transitioning to FullyClosed and closing socket")
-		stream.mu.Lock()
-		stream.State = StreamFullyClosed
-		stream.mu.Unlock()
-		if stream.Sock != nil {
-			stream.Sock.Close()
-		}
-		n.DeleteStream(cc.CircID, stream)
-		n.log.Info().
-			Uint16("circID", cc.CircID).
-			Uint16("streamID", relay.StreamID).
-			Msg("Stream fully closed and deleted")
-	}
-
-	return nil
 }
 
 // SendRelayEndAsClient sends a RelayEnd cell as a client
@@ -2218,28 +2192,6 @@ func (n *node) HasStream(circID, streamID uint16) bool {
 		Uint16("streamID", streamID).
 		Bool("exists", exists).
 		Msg("HasStream check result")
-	return exists
-}
-
-// ContainsStream reports whether a relay circuit contains a given stream
-func (n *node) ContainsStream(circID, streamID uint16) bool {
-	n.streamsMu.RLock()
-	defer n.streamsMu.RUnlock()
-
-	table, ok := n.streamTables[circID]
-	if !ok {
-		n.log.Debug().
-			Uint16("circID", circID).
-			Uint16("streamID", streamID).
-			Msg("ContainsStream: no stream table for circuit")
-		return false
-	}
-	_, exists := table.Streams[streamID]
-	n.log.Debug().
-		Uint16("circID", circID).
-		Uint16("streamID", streamID).
-		Bool("exists", exists).
-		Msg("ContainsStream check result")
 	return exists
 }
 
@@ -2870,7 +2822,32 @@ func (n *node) HandleRelayData(relay RelayCell, circ *Circuit) error {
 		Uint16("circID", circ.InCircID).
 		Uint16("streamID", relay.StreamID).
 		Int("dataLen", len(relay.Data)).
-		Msg("Stored received data, sending reply back to client")
+		Msg("Stored received data at exit node")
+
+	// Check if there's a server registered for this stream's target address
+	stream.mu.Lock()
+	targetAddr := stream.TargetAddr
+	stream.mu.Unlock()
+
+	n.serverConnectionsMu.RLock()
+	serverAddr, hasServer := n.serverConnections[targetAddr]
+	n.serverConnectionsMu.RUnlock()
+
+	if hasServer {
+		// Forward data to the server
+		n.log.Info().
+			Uint16("circID", circ.InCircID).
+			Uint16("streamID", relay.StreamID).
+			Str("serverAddr", serverAddr).
+			Str("targetAddr", targetAddr).
+			Msg("Forwarding data to server")
+
+		err = n.forwardDataToServer(circ.InCircID, relay.StreamID, targetAddr, relay.Data, serverAddr)
+		if err != nil {
+			n.log.Error().Err(err).Msg("Failed to forward data to server")
+			// Continue to send echo reply as fallback
+		}
+	}
 
 	// Send reply asynchronously
 	n.sendReplyAsync(circ, relay, stream)

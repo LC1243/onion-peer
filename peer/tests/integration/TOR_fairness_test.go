@@ -38,7 +38,7 @@ func Test_TOR_Fairness_Interactive_Vs_Bulk(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 	z.PopulateOnionKeys(nodes)
 
-	hops := [3]string{guard.GetAddr(), middle.GetAddr(), exit.GetAddr()}
+	hops := []string{guard.GetAddr(), middle.GetAddr(), exit.GetAddr()}
 
 	// Build circuits
 	circBulk, err := clientBulk.BuildCircuit(hops, 30*time.Second)
@@ -124,7 +124,7 @@ func Test_TOR_Fairness_MultipleStreams(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 	z.PopulateOnionKeys(nodes)
 
-	hops := [3]string{guard.GetAddr(), middle.GetAddr(), exit.GetAddr()}
+	hops := []string{guard.GetAddr(), middle.GetAddr(), exit.GetAddr()}
 
 	// Build circuit
 	circ, err := client.BuildCircuit(hops, 30*time.Second)
