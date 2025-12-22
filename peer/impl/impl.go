@@ -48,46 +48,14 @@ func NewPeer(conf peer.Configuration) peer.Peer {
 		n.routing[addr] = addr // self-entry
 	}
 
-	// initialize internal maps
-	n.lastRecv = make(map[string]uint)
-	n.rumorStore = make(map[string]map[uint]transport.Message)
-	n.ackWaiter = make(map[string]*ackWait)
-	n.circuits = make(map[circuitKey]*Circuit)
-	n.clientCircuits = make(map[uint16]*ClientCircuit)
-	n.streamTables = make(map[uint16]*CircuitStreams)
-	n.pendingStreams = make(map[uint16]map[uint16]*Stream)
+	n.initMaps()
+
 	// Initialize rate limiting token buckets
 	n.writeBucket = NewTokenBucket(DefaultRate, DefaultCapacity)
 	n.readBucket = NewTokenBucket(DefaultRate, DefaultCapacity)
 
 	// Initialize scheduler
 	n.scheduler = NewCircuitScheduler(n)
-
-	// Initialize crypto state
-	n.peerOnionKeys = make(map[string]*rsa.PublicKey)
-	n.diffieHellmanHandshakePairs = make(map[uint16]*DiffieHellmanHandshakePairs)
-	n.circuitCryptoStates = make(map[uint16][]*CircuitCryptoState)
-
-	n.serviceKeys = make(map[string]*OnionKeyPair)
-	n.hiddenServices = make(map[string]*HiddenService)
-	n.hsdirFrags = make(map[fragKey]*fragBuf)
-	n.introPoints = make(map[string][]*IntroPointState)
-	n.introWait = make(map[uint16]chan struct{})
-	n.hsDirStore = make(map[string]*ServiceDescriptor)
-	n.hsdirWait = make(map[uint16]chan *ServiceDescriptor)
-	n.cookieAck = make(map[uint16]chan struct{})
-	n.rendezvousEntries = make(map[string]uint16) // every node can act as rendezvous point
-	n.introAckCh = make(map[uint16]chan struct{})
-	n.introAckSuccess = make(map[uint16]bool)
-	n.rendezvousStates = make(map[string]*DhRendezvousState)
-	n.rendezvousAssoc = make(map[uint16]uint16)
-	n.rendezvousComplete = make(map[uint16]chan struct{})
-
-	// Initialize server-related structures
-	n.serverConnections = make(map[string]string)
-	n.serverReceivedData = make(map[string][][]byte)
-	n.serverConnectionIDs = make(map[string]string)
-	n.serverStreamMap = make(map[string]*serverStreamMapping)
 
 	// Generate onion keypair for this node
 	// Note: In production, this should be loaded from persistent storage
@@ -639,4 +607,41 @@ func (n *node) SetTestCellInterceptor(interceptor func(*Cell)) {
 	n.TestInterceptorMu.Lock()
 	n.TestCellInterceptor = interceptor
 	n.TestInterceptorMu.Unlock()
+}
+
+func (n *node) initMaps() {
+	// initialize internal maps
+	n.lastRecv = make(map[string]uint)
+	n.rumorStore = make(map[string]map[uint]transport.Message)
+	n.ackWaiter = make(map[string]*ackWait)
+	n.circuits = make(map[circuitKey]*Circuit)
+	n.clientCircuits = make(map[uint16]*ClientCircuit)
+	n.streamTables = make(map[uint16]*CircuitStreams)
+	n.pendingStreams = make(map[uint16]map[uint16]*Stream)
+
+	// Initialize crypto state
+	n.peerOnionKeys = make(map[string]*rsa.PublicKey)
+	n.diffieHellmanHandshakePairs = make(map[uint16]*DiffieHellmanHandshakePairs)
+	n.circuitCryptoStates = make(map[uint16][]*CircuitCryptoState)
+
+	n.serviceKeys = make(map[string]*OnionKeyPair)
+	n.hiddenServices = make(map[string]*HiddenService)
+	n.hsdirFrags = make(map[fragKey]*fragBuf)
+	n.introPoints = make(map[string][]*IntroPointState)
+	n.introWait = make(map[uint16]chan struct{})
+	n.hsDirStore = make(map[string]*ServiceDescriptor)
+	n.hsdirWait = make(map[uint16]chan *ServiceDescriptor)
+	n.cookieAck = make(map[uint16]chan struct{})
+	n.rendezvousEntries = make(map[string]uint16) // every node can act as rendezvous point
+	n.introAckCh = make(map[uint16]chan struct{})
+	n.introAckSuccess = make(map[uint16]bool)
+	n.rendezvousStates = make(map[string]*DhRendezvousState)
+	n.rendezvousAssoc = make(map[uint16]uint16)
+	n.rendezvousComplete = make(map[uint16]chan struct{})
+
+	// Initialize server-related structures
+	n.serverConnections = make(map[string]string)
+	n.serverReceivedData = make(map[string][][]byte)
+	n.serverConnectionIDs = make(map[string]string)
+	n.serverStreamMap = make(map[string]*serverStreamMapping)
 }

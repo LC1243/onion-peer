@@ -177,7 +177,7 @@ type TorClientIntroduction interface {
 	// ConnectToHiddenService connects to a hidden service, retrieving the service descriptor from the HSDir,
 	// selecting an introduction point, and building a circuit to a rendezvous point.
 	// It returns the circuitID and streamID over which the connection to the hidden service is established.
-	ConnectToHiddenService(serviceID string, HSDirCircID uint16) (circuitID, streamId uint16, err error)
+	ConnectToHiddenService(serviceID string, HSDirCircID uint16) (circuitID, streamID uint16, err error)
 }
 
 // Factory is the type of function we are using to create new instances of
