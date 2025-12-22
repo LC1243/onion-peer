@@ -41,7 +41,7 @@ type streamInfo struct {
 
 type circuitInfo struct {
 	circID uint16
-	hops   [3]string // Guard, Middle, Exit addresses
+	hops   []string // Guard, Middle, Exit addresses
 }
 
 type serverInfo struct {
@@ -365,7 +365,7 @@ func handleCreateStream() {
 		return
 	}
 
-	log.Info().Msg("Enter target address (e.g., service:8080): ")
+	log.Info().Msg("Enter target address (e.g., target:8080): ")
 	targetAddr, _ := reader.ReadString('\n')
 	targetAddr = strings.TrimSpace(targetAddr)
 
@@ -497,7 +497,7 @@ func handleRegisterServer() {
 		return
 	}
 
-	log.Info().Msg("\nEnter target address to serve (e.g., example.com:80): ")
+	log.Info().Msg("\nEnter target address to serve (e.g., onion.com:80): ")
 	targetAddr, _ := reader.ReadString('\n')
 	targetAddr = strings.TrimSpace(targetAddr)
 

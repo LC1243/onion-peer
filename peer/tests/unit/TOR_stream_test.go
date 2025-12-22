@@ -316,7 +316,7 @@ func Test_TOR_Stream_ClientServerCommunication(t *testing.T) {
 	require.NoError(t, err, "Server should register successfully")
 
 	// Build circuit
-	hops := [3]string{guard.GetAddr(), middle.GetAddr(), exit.GetAddr()}
+	hops := []string{guard.GetAddr(), middle.GetAddr(), exit.GetAddr()}
 	circID, err := client.Peer.BuildCircuit(hops, 5*time.Second)
 	require.NoError(t, err, "Circuit should be built successfully")
 
@@ -413,7 +413,7 @@ func Test_TOR_Multiple_Circuits_Multiple_Streams(t *testing.T) {
 
 	// Circuit 1: Non-intersecting with Circuit 2
 	// Client -> Node1 -> Node2 -> Node3
-	circuit1Hops := [3]string{
+	circuit1Hops := []string{
 		nodes[1].GetAddr(),
 		nodes[2].GetAddr(),
 		nodes[3].GetAddr(),
@@ -421,7 +421,7 @@ func Test_TOR_Multiple_Circuits_Multiple_Streams(t *testing.T) {
 
 	// Circuit 2: Non-intersecting with Circuit 1
 	// Client -> Node4 -> Node5 -> Node6
-	circuit2Hops := [3]string{
+	circuit2Hops := []string{
 		nodes[4].GetAddr(),
 		nodes[5].GetAddr(),
 		nodes[6].GetAddr(),
@@ -429,7 +429,7 @@ func Test_TOR_Multiple_Circuits_Multiple_Streams(t *testing.T) {
 
 	// Circuit 3: Shares middle node (Node8) with Circuit 4
 	// Client -> Node7 -> Node8 -> Node9
-	circuit3Hops := [3]string{
+	circuit3Hops := []string{
 		nodes[7].GetAddr(),
 		nodes[8].GetAddr(),
 		nodes[9].GetAddr(),
@@ -437,7 +437,7 @@ func Test_TOR_Multiple_Circuits_Multiple_Streams(t *testing.T) {
 
 	// Circuit 4: Shares middle node (Node8) with Circuit 3
 	// Client -> Node10 -> Node8 -> Node11
-	circuit4Hops := [3]string{
+	circuit4Hops := []string{
 		nodes[10].GetAddr(),
 		nodes[8].GetAddr(), // Shared middle node
 		nodes[11].GetAddr(),
@@ -525,9 +525,9 @@ func Test_TOR_Multiple_Circuits_Multiple_Streams(t *testing.T) {
 		}
 	}
 	require.NotZero(t, exit1CircID, "Exit1 should have a circuit with streams")
-	require.True(t, exit1.Peer.ContainsStream(exit1CircID, stream1_1),
+	require.True(t, exit1.Peer.HasStream(exit1CircID, stream1_1),
 		"Exit1 should have stream 1_1")
-	require.True(t, exit1.Peer.ContainsStream(exit1CircID, stream1_2),
+	require.True(t, exit1.Peer.HasStream(exit1CircID, stream1_2),
 		"Exit1 should have stream 1_2")
 
 	// Circuit 2 exit is Node6
@@ -544,7 +544,7 @@ func Test_TOR_Multiple_Circuits_Multiple_Streams(t *testing.T) {
 		}
 	}
 	require.NotZero(t, exit2CircID, "Exit2 should have a circuit with streams")
-	require.True(t, exit2.Peer.ContainsStream(exit2CircID, stream2_1),
+	require.True(t, exit2.Peer.HasStream(exit2CircID, stream2_1),
 		"Exit2 should have stream 2_1")
 
 	// Verify the shared middle node (Node8) is handling both circuits 3 and 4
