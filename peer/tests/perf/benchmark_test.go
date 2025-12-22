@@ -243,7 +243,7 @@ func runThroughputBenchmark(b *testing.B, congestionControl bool) {
 		require.True(b, ready, "Stream failed to open")
 
 		// Prepare payload
-		payloadSize := 400 // Reduced from 1024 to fit in a single cell
+		payloadSize := 498
 		b.SetBytes(int64(payloadSize))
 		payload := make([]byte, payloadSize)
 
