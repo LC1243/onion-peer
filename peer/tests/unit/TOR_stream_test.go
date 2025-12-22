@@ -275,21 +275,21 @@ func Test_TOR_Stream_FlowControl(t *testing.T) {
 // opening streams on each circuit to verify full functionality.
 func Test_TOR_Multiple_Circuits_Multiple_Streams(t *testing.T) {
 	// Configurable number of nodes in the network
-	const NUM_NODES = 12
+	const NumNodes = 12
 
 	transp := channelFac()
 
 	// Create many nodes
-	nodes := make([]z.TestNode, NUM_NODES)
-	for i := range NUM_NODES {
+	nodes := make([]z.TestNode, NumNodes)
+	for i := range NumNodes {
 		node := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
 		nodes[i] = node
 		t.Cleanup(func() { node.Stop() })
 	}
 
 	// Set up full mesh routing so all nodes can communicate
-	for i := range NUM_NODES {
-		for j := 0; j < NUM_NODES; j++ {
+	for i := range NumNodes {
+		for j := 0; j < NumNodes; j++ {
 			if i != j {
 				nodes[i].AddPeer(nodes[j].GetAddr())
 			}
