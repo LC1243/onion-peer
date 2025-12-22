@@ -2303,6 +2303,14 @@ func (n *node) HandleRelayRendezvous2(relay RelayCell) error {
 	n.circuitCryptoStates[st.CircID] = append(n.circuitCryptoStates[st.CircID], cryptoState)
 	n.cryptoStatesMu.Unlock()
 
+	// Notify that the rendezvous/introduction process is complete
+	n.rendezvousCompleteMu.Lock()
+	if ch, exists := n.rendezvousComplete[st.CircID]; exists {
+		close(ch)
+		delete(n.rendezvousComplete, st.CircID)
+	}
+	n.rendezvousCompleteMu.Unlock()
+
 	n.log.Info().
 		Uint16("circID", relay.CircID).
 		Msg("Rendezvous handshake complete, circuit joined")
@@ -2322,4 +2330,134 @@ func (n *node) GetServicePublicKey(serviceID string) []byte {
 	n.hiddenServiceMu.RLock()
 	defer n.hiddenServiceMu.RUnlock()
 	return x509.MarshalPKCS1PublicKey(n.hiddenServices[serviceID].KeyPair.Public)
+}
+
+// ConnectToHiddenService implements peer.TorClientRendezvous
+func (n *node) ConnectToHiddenService(serviceID string, HSDirCircID uint16) (circuitID, streamId uint16, err error) {
+	if serviceID == "" {
+		return 0, 0, fmt.Errorf("service ID is required")
+	}
+
+	// Retrieve hidden service descriptor from HSDir
+	found, introORs, servicePubKey := n.LookupDescriptor(HSDirCircID, serviceID, 1*time.Second)
+	if !found {
+		return 0, 0,
+			fmt.Errorf("hidden service descriptor not found for service ID %s", serviceID)
+	}
+	if len(introORs) == 0 {
+		return 0, 0,
+			fmt.Errorf("no introduction points found in descriptor for service ID %s", serviceID)
+	}
+	if len(servicePubKey) == 0 {
+		return 0, 0,
+			fmt.Errorf("no service public key found in descriptor for service ID %s", serviceID)
+	}
+
+	// Select a random rendezvous point
+	excludeItself := make(map[string]struct{})
+	excludeItself[n.conf.Socket.GetAddress()] = struct{}{}
+	rendezvousPoint, found := n.PickRandomRelay(excludeItself)
+	if !found {
+		return 0, 0, fmt.Errorf("no available relays to build rendezvous point")
+	}
+
+	// Build a random path to the rendezvous point
+	excludes := make([]string, 2)
+	excludes = append(excludes, n.conf.Socket.GetAddress())
+	excludes = append(excludes, rendezvousPoint)
+	middleHops, err := n.BuildRandomPath(2, excludes...)
+	if err != nil {
+		return 0, 0, fmt.Errorf("failed to build random path: %w", err)
+	}
+	rpHops := append(middleHops, rendezvousPoint)
+
+	rpCircID, err := n.BuildCircuit([3]string(rpHops), 1*time.Second)
+	if err != nil {
+		return 0, 0, fmt.Errorf("failed to build circuit to rendezvous point: %w", err)
+	}
+
+	// Prepare the rendezvous point for the connection
+	cookie, err := n.PrepareRendezvousPoint(rpCircID, 1*time.Second)
+	if err != nil {
+		return 0, 0, fmt.Errorf("failed to prepare rendezvous point: %w", err)
+	}
+
+	// Try each introduction point until one succeeds
+	for _, introAddr := range introORs {
+		n.rendezvousCompleteMu.Lock()
+		if ch, exists := n.rendezvousComplete[rpCircID]; exists {
+			close(ch)
+			delete(n.rendezvousComplete, rpCircID) // Clear previous rendezvous complete channel if any
+		}
+		n.rendezvousCompleteMu.Unlock()
+
+		// Build a random path to the introduction point
+		excludes := make([]string, 2)
+		excludes = append(excludes, n.conf.Socket.GetAddress())
+		excludes = append(excludes, introAddr)
+		middleHops, err := n.BuildRandomPath(2, excludes...)
+		if err != nil {
+			n.log.Error().
+				Err(err).
+				Str("introAddr", introAddr).
+				Msg("failed to build random path to introduction point")
+			continue
+		}
+		introHops := append(middleHops, introAddr)
+
+		introCircID, err := n.BuildCircuit([3]string(introHops), 1*time.Second)
+		if err != nil {
+			n.log.Error().
+				Err(err).
+				Str("introAddr", introAddr).
+				Msg("failed to build circuit to introduction point")
+			continue
+		}
+
+		// Introduce to the hidden service
+		completedCh := make(chan struct{})
+		n.rendezvousCompleteMu.Lock()
+		n.rendezvousComplete[introCircID] = completedCh
+		n.rendezvousCompleteMu.Unlock()
+		err = n.IntroduceToHiddenService(introCircID, serviceID, servicePubKey, cookie, rendezvousPoint, 1*time.Second)
+		if err != nil {
+			n.log.Error().
+				Err(err).
+				Str("introAddr", introAddr).
+				Msg("failed to introduce to hidden service")
+			continue
+		}
+
+		// Waiting for a RENDEZVOUS2 from the rendezvous point
+		select {
+		case <-completedCh:
+			streamId, err := n.OpenStream(rpCircID, rendezvousPoint)
+			if err != nil {
+				n.log.Error().
+					Err(err).Str("introAddr", introAddr).
+					Msg("failed to open stream to hidden service via rendezvous point")
+				continue
+			}
+			streamFound := n.HasStream(rpCircID, streamId)
+			if !streamFound {
+				n.log.Error().
+					Str("introAddr", introAddr).
+					Msg("stream to hidden service not found after rendezvous complete")
+				continue
+			}
+			n.log.Info().
+				Str("introAddr", introAddr).
+				Uint16("streamId", streamId).
+				Msg("Successfully connected to hidden service via rendezvous")
+			return rpCircID, streamId, nil
+		case <-time.After(2 * time.Second):
+			n.log.Error().Err(err).Str("introAddr", introAddr).Msg("timeout waiting for rendezvous complete")
+			continue
+		}
+	}
+
+	n.log.Info().
+		Str("serviceID", serviceID).
+		Msg("Failed to connect to hidden service via all introduction points")
+	return 0, 0, fmt.Errorf("failed to connect to hidden service %s", serviceID)
 }
