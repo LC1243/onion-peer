@@ -52,10 +52,17 @@ func BuildNHopCircuit(t *testing.T, n int) (client z.TestNode, relays []z.TestNo
 	}
 
 	t.Cleanup(func() {
+		client.Stop()
 		for _, node := range relays {
 			node.Stop()
 		}
 	})
+
+	// Enable congestion control on all nodes for consistent performance testing
+	client.SetCongestionControl(true)
+	for _, node := range relays {
+		node.SetCongestionControl(true)
+	}
 
 	// Full mesh routing
 	nodes := append([]z.TestNode{client}, relays...)
@@ -116,36 +123,71 @@ func RunBenchmarkLatency(b *testing.T) map[int]float64 {
 	results := make(map[int]float64)
 
 	for hops := MinHops; hops <= MaxHops; hops++ {
-		start := time.Now()
 		client, _, _, circID := BuildNHopCircuit(b, hops)
 
 		streamID, err := client.Peer.OpenStream(circID, "latency:test")
 		require.NoError(b, err)
 
 		payload := make([]byte, PayloadSize)
-		var total time.Duration
 
-		// Warm-up
+		// Wait for stream to be fully established
+		ready := false
+		for k := 0; k < 50; k++ {
+			if client.Peer.HasStream(circID, streamID) {
+				ready = true
+				break
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+		require.True(b, ready, "Stream failed to open")
+
+		// Warm-up to establish circuit state
 		time.Sleep(300 * time.Millisecond)
 
-		for i := 0; i < LatencyPackets; i++ {
+		var totalLatency time.Duration
+		successfulMeasurements := 0
 
+		for i := 0; i < LatencyPackets; i++ {
+			sendTime := time.Now()
+			
 			err = client.Peer.SendStreamData(circID, streamID, payload)
 			require.NoError(b, err)
 
-			// Wait for echo
-			for {
-				pkts, _ := client.Peer.GetReceivedStreamPackets(circID, streamID)
-				if len(pkts) > i {
-					break
+			timeout := time.After(5 * time.Second)
+			ticker := time.NewTicker(1 * time.Millisecond)
+			
+			received := false
+			for !received {
+				select {
+				case <-timeout:
+					b.Logf("Timeout waiting for packet %d on %d hops", i, hops)
+					goto nextPacket
+				case <-ticker.C:
+					pkts, _ := client.Peer.GetReceivedStreamPackets(circID, streamID)
+					if len(pkts) > i {
+						latency := time.Since(sendTime)
+						totalLatency += latency
+						successfulMeasurements++
+						received = true
+					}
 				}
-				time.Sleep(1 * time.Millisecond)
 			}
+			ticker.Stop()
+			
+			nextPacket:
+			// Small delay between measurements
+			time.Sleep(10 * time.Millisecond)
 		}
 
-		total = time.Since(start)
-		avgMs := float64(total.Milliseconds()) / LatencyPackets
-		results[hops] = avgMs
+		if successfulMeasurements > 0 {
+			avgMs := float64(totalLatency.Nanoseconds()) / 1e6 / float64(successfulMeasurements)
+			results[hops] = avgMs
+			b.Logf("Hops: %d, Successful: %d/%d, Avg Latency: %.2f ms", 
+				hops, successfulMeasurements, LatencyPackets, avgMs)
+		} else {
+			results[hops] = 0
+			b.Logf("Hops: %d, No successful measurements", hops)
+		}
 
 		client.Peer.CloseStream(circID, streamID)
 		client.Peer.DestroyCircuit(circID)
@@ -170,55 +212,134 @@ func RunBenchmarkThroughput(b *testing.T) map[int]float64 {
 			}
 			time.Sleep(100 * time.Millisecond)
 		}
-		require.True(b, ready, "Stream failed to open")
+		require.True(b, ready, "Stream failed to open for %d hops", hops)
 
 		payload := make([]byte, PayloadSize)
-		time.Sleep(300 * time.Millisecond)
+		
+		// Use adaptive packet count based on circuit complexity
+		// Fewer packets for longer circuits to keep test duration reasonable
+		packetsToSend := ThroughputPackets
+		//if hops > 6 {
+		//	packetsToSend = ThroughputPackets / 2 // Half packets for 7+ hops
+		//}
+		//if hops > 8 {
+		//	packetsToSend = ThroughputPackets / 4 // Quarter packets for 9+ hops
+		//}
+		
+		// More conservative scaling for longer circuits to prevent overwhelming
+		baseDelay := 200 * time.Microsecond
+		hopPenalty := time.Duration(hops * 100) * time.Microsecond 
+		sendDelay := baseDelay + hopPenalty
+		
+		b.Logf("Testing %d hops with %d packets and send delay %v", hops, packetsToSend, sendDelay)
 
-		start := time.Now()
-		for i := 0; i < ThroughputPackets; i++ {
-			for {
-				err := client.Peer.SendStreamData(circID, streamID, payload)
-				if err == nil {
-					break
+		time.Sleep(200 * time.Millisecond)
+
+		var sendStart, sendEnd time.Time
+		var packetsSent int
+		
+		sendDone := make(chan struct{})
+		
+		go func() {
+			defer close(sendDone)
+			sendStart = time.Now()
+			
+			for i := 0; i < packetsToSend; i++ {
+				// Retry mechanism for flow control: more retries for longer circuits
+				maxRetries := 5 + hops*2
+				success := false
+				
+				for retry := 0; retry < maxRetries; retry++ {
+					err := client.Peer.SendStreamData(circID, streamID, payload)
+					if err == nil {
+						packetsSent++
+						success = true
+						break
+					}
+
+					backoff := time.Duration((retry+1)*hops) * 5 * time.Millisecond
+					time.Sleep(backoff)
 				}
-				time.Sleep(5 * time.Millisecond)
+				
+				if !success {
+					b.Logf("Failed to send packet %d after %d retries on %d hops", i, maxRetries, hops)
+				}
+				
+				// avoid overwhelming longer circuits
+				time.Sleep(sendDelay)
 			}
-			time.Sleep(3 * time.Millisecond)
-		}
+			sendEnd = time.Now()
+		}()
 
-		// Wait for all echos
-		timeout := time.After(10 * time.Second)
-		ticker := time.NewTicker(500 * time.Millisecond)
-		defer ticker.Stop()
+		// Wait for sending to complete
+		<-sendDone
+		
+		// Wait additional time for packets to traverse the circuit
+		drainTime := time.Duration(1000 + hops*300) * time.Millisecond
+		time.Sleep(drainTime)
 
+		// Monitor packet reception with reasonable timeout
+		timeoutSeconds := 20 + hops*5 // Much more reasonable timeout
+		timeout := time.After(time.Duration(timeoutSeconds) * time.Second)
+		ticker := time.NewTicker(50 * time.Millisecond)
+		
 		var finalReceived int
-		exit := false
+		var lastReceived int
+		stableCount := 0
+		
 		for {
 			select {
 			case <-timeout:
-				exit = true
-				break
+				b.Logf("Timeout for %d hops - received %d/%d packets", hops, finalReceived, packetsSent)
+				goto measurementDone
+				
 			case <-ticker.C:
-				pkts, _ := client.Peer.GetReceivedStreamPackets(circID, streamID)
-				finalReceived = len(pkts)
-				if finalReceived >= ThroughputPackets {
-					exit = true
-					break
+				pkts, err := client.Peer.GetReceivedStreamPackets(circID, streamID)
+				if err == nil {
+					finalReceived = len(pkts)
+					
+					if finalReceived >= packetsSent {
+						goto measurementDone
+					}
+					
+					if finalReceived == lastReceived {
+						stableCount++
+						stabilityThreshold := 20 + hops*10
+						if stableCount > stabilityThreshold {
+							goto measurementDone
+						}
+					} else {
+						stableCount = 0
+						lastReceived = finalReceived
+					}
 				}
 			}
-			if exit {
-				break
-			}
 		}
-
-		elapsed := time.Since(start).Seconds()
-		kb := float64(finalReceived*PayloadSize) / 1024.0
-		kbps := kb / elapsed
-		results[hops] = kbps
+		
+		measurementDone:
+		ticker.Stop()
+		
+		sendDuration := sendEnd.Sub(sendStart).Seconds()
+		
+		if finalReceived > 0 && sendDuration > 0 {
+			bytesReceived := float64(finalReceived * PayloadSize)
+			kbps := (bytesReceived / 1024.0) / sendDuration
+			results[hops] = kbps
+			
+			lossRate := float64(packetsSent - finalReceived) / float64(packetsSent) * 100.0
+			b.Logf("Hops: %d, Sent: %d, Received: %d, Loss: %.1f%%, Throughput: %.2f kB/s", 
+				hops, packetsSent, finalReceived, lossRate, kbps)
+		} else {
+			results[hops] = 0
+			b.Logf("Hops: %d, Sent: %d, Received: %d, Throughput: 0.00 kB/s", 
+				hops, packetsSent, finalReceived)
+		}
 
 		client.Peer.CloseStream(circID, streamID)
 		client.Peer.DestroyCircuit(circID)
+		
+		// Clean shutdown between tests
+		time.Sleep(100 * time.Millisecond)
 	}
 	return results
 }
