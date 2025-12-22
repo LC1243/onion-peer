@@ -80,6 +80,8 @@ func NewPeer(conf peer.Configuration) peer.Peer {
 	n.introAckCh = make(map[uint16]chan struct{})
 	n.introAckSuccess = make(map[uint16]bool)
 	n.rendezvousStates = make(map[string]*DhRendezvousState)
+	n.rendezvousAssoc = make(map[uint16]uint16)
+	n.rendezvousComplete = make(map[uint16]chan struct{})
 
 	// Initialize server-related structures
 	n.serverConnections = make(map[string]string)
@@ -222,6 +224,12 @@ type node struct {
 	rendezvousEntryMu sync.Mutex
 	rendezvousEntries map[string]uint16 // cookie -> circID
 	rendezvousStates  map[string]*DhRendezvousState
+
+	rendezvousAssocMu sync.Mutex
+	rendezvousAssoc   map[uint16]uint16 // client circID -> service circID (or inverse)
+
+	rendezvousCompleteMu sync.Mutex
+	rendezvousComplete   map[uint16]chan struct{} // circID -> done
 
 	introAckMu      sync.Mutex
 	introAckCh      map[uint16]chan struct{} // circID -> done

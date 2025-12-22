@@ -173,6 +173,11 @@ type TorClientIntroduction interface {
 	// servicePubKey, cookie, and rendezvousAddr (the address of the RP where the client is waiting).
 	IntroduceToHiddenService(circID uint16, serviceID string,
 		servicePubKey []byte, cookie [20]byte, rendezvousAddr string, timeout time.Duration) error
+
+	// ConnectToHiddenService connects to a hidden service, retrieving the service descriptor from the HSDir,
+	// selecting an introduction point, and building a circuit to a rendezvous point.
+	// It returns the circuitID and streamID over which the connection to the hidden service is established.
+	ConnectToHiddenService(serviceID string, HSDirCircID uint16) (circuitID, streamId uint16, err error)
 }
 
 // Factory is the type of function we are using to create new instances of

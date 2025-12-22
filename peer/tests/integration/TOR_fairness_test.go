@@ -102,7 +102,7 @@ func Test_TOR_Fairness_MultipleStreams(t *testing.T) {
 	// Client opens two streams on the same circuit.
 	// Stream 1: Bulk
 	// Stream 2: Interactive
-	
+
 	trans := udp.NewUDP()
 
 	client := z.NewTestNode(t, studentFac, trans, "127.0.0.1:0", z.WithAutostart(true))
