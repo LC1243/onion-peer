@@ -2417,7 +2417,7 @@ func (n *node) ConnectToHiddenService(serviceID string, HSDirCircID uint16) (cir
 		// Introduce to the hidden service
 		completedCh := make(chan struct{})
 		n.rendezvousCompleteMu.Lock()
-		n.rendezvousComplete[introCircID] = completedCh
+		n.rendezvousComplete[rpCircID] = completedCh
 		n.rendezvousCompleteMu.Unlock()
 		err = n.IntroduceToHiddenService(introCircID, serviceID, servicePubKey, cookie, rendezvousPoint, 1*time.Second)
 		if err != nil {
