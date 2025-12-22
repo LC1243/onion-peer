@@ -2907,13 +2907,12 @@ func (n *node) HandleRelayDataAsOP(relay RelayCell, cc *ClientCircuit) error {
 			Msg("No crypto states found for circuit")
 		return fmt.Errorf("no crypto states found for circuit %d", cc.CircID)
 	}
-
 	n.log.Warn().
 		Uint16("circID", cc.CircID).
 		Uint16("streamID", relay.StreamID).
 		Int("numCryptoStates", len(cryptoStates)).
 		Bool("isRendezvous", cc.IsRendezvous).
-		Hex("encryptedFirst8", relay.Data[:8]).
+		//Hex("encryptedFirst8", relay.Data[:8]).
 		Msg("[BOB] About to decrypt RELAY_DATA")
 
 	// Decrypt the payload
