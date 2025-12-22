@@ -96,8 +96,6 @@ type Stream struct {
 	// Fairness / Prioritization
 	CellCount float64 // EWMA of cells sent
 	IsBulk    bool    // True if CellCount > Threshold
-
-	// TODO: In real implementation, there would be a server node sending data back, not exit
 }
 
 type CircuitStreams struct {
@@ -301,7 +299,6 @@ func (n *node) HandleCreated(cell Cell, src string) error {
 }
 
 // HandleRelay handles a Relay cell
-// TODO: All the relay cells need to have the command encrypted as well
 func (n *node) HandleRelay(cell Cell, src string) error {
 	// First, check if this is for a rendezvous circuit
 	//n.rendezvousAssocMu.Lock()
@@ -309,78 +306,7 @@ func (n *node) HandleRelay(cell Cell, src string) error {
 	//n.rendezvousAssocMu.Unlock()
 	n.log.Debug().Msgf("Handling relay cell with CircID %d from %s", cell.CircID, src)
 	if isRendezvous {
-		// CRITICAL FIX FOR RENDEZVOUS CIRCUITS (debugged using copilot):
-		// The RP must decrypt its layer before blind forwarding, just like any other relay node.
-		// Without this, Bob would receive data still encrypted with Alice's RP layer, which Bob
-		// cannot decrypt as Alice and Bob have different RP crypto states.
-		// Flow: Alice encrypts [SharedSecret, RP, Middle, Guard] -> Guard decrypts -> Middle decrypts
-		//       -> RP decrypts RP layer -> forwards SharedSecret-encrypted data to Bob's circuit
-		//       -> Bob's Middle encrypts backward -> Bob's Guard encrypts backward -> Bob receives
-		//       -> Bob decrypts [Guard bwd, Middle bwd, SharedSecret fwd]
-		n.log.Debug().Msg("Will forward relay cell at rendezvous point")
-
-		// Look up the incoming circuit to decrypt the RP layer
-		n.circuitsMu.RLock()
-		var incomingCirc *Circuit
-		for k, c := range n.circuits {
-			if k.InCircID == cell.CircID {
-				incomingCirc = c
-				break
-			}
-		}
-		n.circuitsMu.RUnlock()
-
-		if incomingCirc == nil {
-			return fmt.Errorf("rendezvous incoming circuit %d not found", cell.CircID)
-		}
-
-		// Decrypt the relay cell data with RP's crypto state before forwarding
-		relayCell, err := n.DecodeRelayCell(cell)
-		if err != nil {
-			return err
-		}
-
-		cryptoStates := n.circuitCryptoStates[incomingCirc.InCircID]
-		if len(cryptoStates) > 0 {
-			incomingCirc.CryptoMu.Lock()
-			decryptedData, _ := DecryptRelayCellAtHop(cryptoStates[0], DirectionForward, relayCell.Data, relayCell.Digest)
-			incomingCirc.CryptoMu.Unlock()
-			n.log.Debug().Msg("[RP] Decrypted RP layer before blind forwarding (critical for rendezvous)")
-			relayCell.Data = decryptedData
-			relayCell.Length = uint16(len(decryptedData))
-		}
-
-		// Look up the peer circuit
-		n.circuitsMu.RLock()
-		var peerKey *circuitKey
-		for k := range n.circuits {
-			if k.InCircID == peerCircID {
-				keyCopy := k // avoid loop variable capture
-				peerKey = &keyCopy
-				break
-			}
-		}
-		n.circuitsMu.RUnlock()
-
-		if peerKey == nil {
-			return fmt.Errorf("rendezvous peer circuit %d not found", peerCircID)
-		}
-
-		n.log.Debug().
-			Uint16("fromCircID", cell.CircID).
-			Uint16("toCircID", peerCircID).
-			Str("toHop", peerKey.PrevHop).
-			Msg("Forwarding relay cell at rendezvous point after decrypting RP layer")
-
-		// Rewrite circuit ID for the receiving side and encode
-		relayCell.CircID = peerKey.InCircID
-		forwardCell, err := n.EncodeRelayCell(relayCell)
-		if err != nil {
-			return err
-		}
-
-		// Forward to the other circuit's previous hop
-		return n.SendCell(peerKey.PrevHop, forwardCell)
+		return n.HandleRelayRendezvous(cell, peerCircID)
 	}
 
 	// Check if this is for a client circuit (OP receiving relay cells)
@@ -393,6 +319,82 @@ func (n *node) HandleRelay(cell Cell, src string) error {
 	}
 
 	return n.HandleRelayForwarding(cell, src)
+}
+
+// HandleRelayRendezvous handles a relay cell at the rendezvous point
+func (n *node) HandleRelayRendezvous(cell Cell, peerCircID uint16) error {
+	// CRITICAL FIX FOR RENDEZVOUS CIRCUITS (debugged using copilot):
+	// The RP must decrypt its layer before blind forwarding, just like any other relay node.
+	// Without this, Bob would receive data still encrypted with Alice's RP layer, which Bob
+	// cannot decrypt as Alice and Bob have different RP crypto states.
+	// Flow: Alice encrypts [SharedSecret, RP, Middle, Guard] -> Guard decrypts -> Middle decrypts
+	//       -> RP decrypts RP layer -> forwards SharedSecret-encrypted data to Bob's circuit
+	//       -> Bob's Middle encrypts backward -> Bob's Guard encrypts backward -> Bob receives
+	//       -> Bob decrypts [Guard bwd, Middle bwd, SharedSecret fwd]
+	n.log.Debug().Msg("Will forward relay cell at rendezvous point")
+
+	// Look up the incoming circuit to decrypt the RP layer
+	n.circuitsMu.RLock()
+	var incomingCirc *Circuit
+	for k, c := range n.circuits {
+		if k.InCircID == cell.CircID {
+			incomingCirc = c
+			break
+		}
+	}
+	n.circuitsMu.RUnlock()
+
+	if incomingCirc == nil {
+		return fmt.Errorf("rendezvous incoming circuit %d not found", cell.CircID)
+	}
+
+	// Decrypt the relay cell data with RP's crypto state before forwarding
+	relayCell, err := n.DecodeRelayCell(cell)
+	if err != nil {
+		return err
+	}
+
+	cryptoStates := n.circuitCryptoStates[incomingCirc.InCircID]
+	if len(cryptoStates) > 0 {
+		incomingCirc.CryptoMu.Lock()
+		decryptedData, _ := DecryptRelayCellAtHop(cryptoStates[0], DirectionForward, relayCell.Data, relayCell.Digest)
+		incomingCirc.CryptoMu.Unlock()
+		n.log.Debug().Msg("[RP] Decrypted RP layer before blind forwarding (critical for rendezvous)")
+		relayCell.Data = decryptedData
+		relayCell.Length = uint16(len(decryptedData))
+	}
+
+	// Look up the peer circuit
+	n.circuitsMu.RLock()
+	var peerKey *circuitKey
+	for k := range n.circuits {
+		if k.InCircID == peerCircID {
+			keyCopy := k // avoid loop variable capture
+			peerKey = &keyCopy
+			break
+		}
+	}
+	n.circuitsMu.RUnlock()
+
+	if peerKey == nil {
+		return fmt.Errorf("rendezvous peer circuit %d not found", peerCircID)
+	}
+
+	n.log.Debug().
+		Uint16("fromCircID", cell.CircID).
+		Uint16("toCircID", peerCircID).
+		Str("toHop", peerKey.PrevHop).
+		Msg("Forwarding relay cell at rendezvous point after decrypting RP layer")
+
+	// Rewrite circuit ID for the receiving side and encode
+	relayCell.CircID = peerKey.InCircID
+	forwardCell, err := n.EncodeRelayCell(relayCell)
+	if err != nil {
+		return err
+	}
+
+	// Forward to the other circuit's previous hop
+	return n.SendCell(peerKey.PrevHop, forwardCell)
 }
 
 // HandleRelayAsOP handles a relay cell when acting as OP
@@ -437,7 +439,8 @@ func (n *node) HandleRelayAsOP(cell Cell, src string, cc *ClientCircuit) error {
 	default:
 		n.log.Error().
 			Int("command", int(relayCell.Command)).
-			Msg("unexpected relay command for client circuit") // This is the only thing that helped in debugging a big issue in Hidden Service
+			Msg("unexpected relay command for client circuit")
+		// This is the only thing that helped in debugging a big issue in Hidden Service
 		return fmt.Errorf("unexpected relay command %d for client circuit", relayCell.Command)
 	}
 }
@@ -744,7 +747,7 @@ func (n *node) HandleRelayBegin(relay RelayCell, circ *Circuit) error {
 			Err(err).
 			Uint16("circID", circ.InCircID).
 			Uint16("streamID", relay.StreamID).
-			Msg("Server failed to open socket. Sending RelayEnd") // TODO: Should send Relay Truncate
+			Msg("Server failed to open socket. Sending RelayEnd")
 		return n.SendRelayEnd(circ, relay.StreamID)
 	}
 
@@ -1365,7 +1368,6 @@ func (n *node) HandleRelayEndAsOP(relay RelayCell, cc *ClientCircuit) error {
 		Str("currentState", streamStateToString(currentState)).
 		Msg("Stream found, processing RelayEnd")
 
-	// TODO: This should've been a relay teardown message instead of a relay end message
 	// Relay teardown is sent if the server failed to open a TCP connection to the target
 	// This creates a single-handshake instead of a two-handshake close
 	// For now, we handle it as a normal RelayEnd
@@ -1448,7 +1450,7 @@ func (n *node) HandleRelayBeginAsOP(relay RelayCell, cc *ClientCircuit) error {
 	if cc.IsRendezvous {
 		// For rendezvous: RP decrypts its layer before forwarding, so Bob only needs to
 		// decrypt Guard backward, Middle backward, and SharedSecret forward
-		n.log.Debug().Msg("[BOB] Decrypting rendezvous RELAY_BEGIN: Guard bwd, Middle bwd, SharedSecret fwd (RP already decrypted)")
+		n.log.Debug().Msg("[BOB] Decrypting rendezvous RELAY_BEGIN: Guard bwd, Middle bwd, SharedSecret fwd")
 		plaintext = relay.Data
 		plaintext, _ = DecryptRelayCellAtHop(cryptoStates[0], DirectionBackward, plaintext, [6]byte{})
 		plaintext, _ = DecryptRelayCellAtHop(cryptoStates[1], DirectionBackward, plaintext, [6]byte{})
@@ -2316,7 +2318,7 @@ func (n *node) encryptAndSendRelayData(
 	stream *Stream,
 	cc *ClientCircuit,
 ) error {
-	// TODO: We currently assume data always fits in a single relay cell, so
+	// We currently assume data always fits in a single relay cell, so
 	// encrypt the whole payload at once
 	encryptedPayload, digest, err := EncryptRelayCellThroughCircuit(cryptoStates, data)
 	if err != nil {

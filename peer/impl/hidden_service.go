@@ -2101,6 +2101,14 @@ func (n *node) SendRelayRendezvous1(circID uint16,
 		Uint16("rpCircID", rpCircID).
 		Msg("Circuit to rendezvous point built")
 
+	return n.completeRendezvous1(rpCircID, dhState, cookie)
+}
+
+func (n *node) completeRendezvous1(
+	rpCircID uint16,
+	dhState *DiffieHellmanHandshakePairs,
+	cookie [CookieSize]byte,
+) error {
 	n.cryptoStatesMu.Lock()
 	cryptoStates := n.circuitCryptoStates[rpCircID]
 	n.cryptoStatesMu.Unlock()
@@ -2113,34 +2121,13 @@ func (n *node) SendRelayRendezvous1(circID uint16,
 	cc := n.clientCircuits[rpCircID]
 	n.clientCircuitsMu.RUnlock()
 
-	// Generate Bob’s DH keypair
-	var bobPriv, bobPub [32]byte
-	_, err = rand.Read(bobPriv[:])
+	payloadBytes, sharedSecret, err := n.generateRendezvousPayload(dhState, cookie)
 	if err != nil {
 		return err
 	}
-	curve25519.ScalarBaseMult(&bobPub, &bobPriv)
-
-	// Compute secret between Alice and Bob
-	sharedSecret, err := curve25519.X25519(bobPriv[:], dhState.PublicKey[:])
-	if err != nil {
-		return err
-	}
-
-	// Compute handshake hash
-	h := sha256.New()
-	h.Write(sharedSecret)
-	h.Write([]byte("handshake"))
-	handshakeHash := h.Sum(nil)
-
-	// Build payload
-	payload := bytes.NewBuffer(nil)
-	payload.Write(cookie[:])
-	payload.Write(bobPub[:])
-	payload.Write(handshakeHash)
 
 	cc.CryptoMu.Lock()
-	encrypted, digest, err := EncryptRelayCellThroughCircuit(cryptoStates, payload.Bytes())
+	encrypted, digest, err := EncryptRelayCellThroughCircuit(cryptoStates, payloadBytes)
 	cc.CryptoMu.Unlock()
 	if err != nil {
 		return err
@@ -2201,6 +2188,39 @@ func (n *node) SendRelayRendezvous1(circID uint16,
 		Msg("Added shared crypto state to Bob's RP circuit for rendezvous")
 
 	return nil
+}
+
+func (n *node) generateRendezvousPayload(
+	dhState *DiffieHellmanHandshakePairs,
+	cookie [CookieSize]byte,
+) ([]byte, []byte, error) {
+	// Generate Bob’s DH keypair
+	var bobPriv, bobPub [32]byte
+	_, err := rand.Read(bobPriv[:])
+	if err != nil {
+		return nil, nil, err
+	}
+	curve25519.ScalarBaseMult(&bobPub, &bobPriv)
+
+	// Compute secret between Alice and Bob
+	sharedSecret, err := curve25519.X25519(bobPriv[:], dhState.PublicKey[:])
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Compute handshake hash
+	h := sha256.New()
+	h.Write(sharedSecret)
+	h.Write([]byte("handshake"))
+	handshakeHash := h.Sum(nil)
+
+	// Build payload
+	payload := bytes.NewBuffer(nil)
+	payload.Write(cookie[:])
+	payload.Write(bobPub[:])
+	payload.Write(handshakeHash)
+
+	return payload.Bytes(), sharedSecret, nil
 }
 
 // BuildCircuitToRP builds a circuit from the service node to the RP node
@@ -2406,7 +2426,7 @@ func (n *node) GetServicePublicKey(serviceID string) []byte {
 }
 
 // ConnectToHiddenService implements peer.TorClientRendezvous
-func (n *node) ConnectToHiddenService(serviceID string, HSDirCircID uint16) (circuitID, streamId uint16, err error) {
+func (n *node) ConnectToHiddenService(serviceID string, HSDirCircID uint16) (circuitID, streamID uint16, err error) {
 	if serviceID == "" {
 		return 0, 0, fmt.Errorf("service ID is required")
 	}
@@ -2455,6 +2475,17 @@ func (n *node) ConnectToHiddenService(serviceID string, HSDirCircID uint16) (cir
 		return 0, 0, fmt.Errorf("failed to prepare rendezvous point: %w", err)
 	}
 
+	return n.tryConnectViaIntroPoints(serviceID, servicePubKey, introORs, rpCircID, cookie, rendezvousPoint)
+}
+
+func (n *node) tryConnectViaIntroPoints(
+	serviceID string,
+	servicePubKey []byte,
+	introORs []string,
+	rpCircID uint16,
+	cookie [20]byte,
+	rendezvousPoint string,
+) (circuitID, streamID uint16, err error) {
 	// Try each introduction point until one succeeds
 	for _, introAddr := range introORs {
 		n.rendezvousCompleteMu.Lock()
@@ -2504,7 +2535,7 @@ func (n *node) ConnectToHiddenService(serviceID string, HSDirCircID uint16) (cir
 		// Waiting for a RENDEZVOUS2 from the rendezvous point
 		select {
 		case <-completedCh:
-			streamId, err := n.OpenStream(rpCircID, rendezvousPoint)
+			streamID, err := n.OpenStream(rpCircID, rendezvousPoint)
 			if err != nil {
 				n.log.Error().
 					Err(err).Str("introAddr", introAddr).
@@ -2512,7 +2543,7 @@ func (n *node) ConnectToHiddenService(serviceID string, HSDirCircID uint16) (cir
 				continue
 			}
 			time.Sleep(200 * time.Millisecond) // wait a bit for the stream to be registered
-			streamFound := n.HasStream(rpCircID, streamId)
+			streamFound := n.HasStream(rpCircID, streamID)
 			if !streamFound {
 				n.log.Error().
 					Str("introAddr", introAddr).
@@ -2521,9 +2552,9 @@ func (n *node) ConnectToHiddenService(serviceID string, HSDirCircID uint16) (cir
 			}
 			n.log.Info().
 				Str("introAddr", introAddr).
-				Uint16("streamId", streamId).
+				Uint16("streamId", streamID).
 				Msg("Successfully connected to hidden service via rendezvous")
-			return rpCircID, streamId, nil
+			return rpCircID, streamID, nil
 		case <-time.After(2 * time.Second):
 			n.log.Error().Err(err).Str("introAddr", introAddr).Msg("timeout waiting for rendezvous complete")
 			continue
