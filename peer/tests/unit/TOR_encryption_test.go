@@ -622,7 +622,3 @@ func Test_TOR_Stream_Creation_With_Tampering(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 	_ = client.DestroyCircuit(circID)
 }
-
-// TODO: Difficult to get right
-// Test_TOR_MultiStream_Isolated_Tampering tests that tampering one message in one stream
-// does not affect messages in other streams, ensuring stream isolation.

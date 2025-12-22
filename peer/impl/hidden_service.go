@@ -15,6 +15,8 @@ import (
 	"golang.org/x/crypto/curve25519"
 )
 
+// Critical debugging done using copilot
+
 type HiddenService struct {
 	ID          string // hash(pubkey)
 	KeyPair     *OnionKeyPair

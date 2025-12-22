@@ -12,6 +12,8 @@ import (
 	"go.dedis.ch/cs438/transport/udp"
 )
 
+// Various debugging refactoring and linting done using copilot
+
 // PacketQueueItem holds a cell waiting to be sent
 type PacketQueueItem struct {
 	Dest string
