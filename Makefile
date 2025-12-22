@@ -49,8 +49,6 @@ test_int_hw3:
 
 # JSONIFY is set to "-json" in CI to format for GitHub, empty for displaying locally
 # || true allows to ignore error code and allow for smoother output logging
-test_bench_tor: # performance benchmarks for TOR
-	go test -tags=performance -bench=. ./peer/tests/perf/...
 test_bench_hw1:
 	@GLOG=no go test -v ${JSONIFY} -timeout 15m -run Test_HW1 -v -count 1 --tags=performance -benchtime=${BENCHTIME} ./peer/tests/perf/ || true
 
@@ -66,10 +64,10 @@ test_bench_hw3_consensus:
 	@GLOG=no go test -v ${JSONIFY} -timeout 12m -run Test_HW3_BenchmarkConsensus -v -count 1 --tags=performance -benchtime=${BENCHTIME} ./peer/tests/perf/ || true
 
 test_bench_tor:
-	@GLOG=no go test -v ${JSONIFY} -timeout 30m -run Test_Plot_And_Benchmark_TOR_Circuits -v -count 1 --tags=performance ./peer/tests/perf/ || true
+	@GLOG=no go test -v ${JSONIFY} -timeout 30m -run Test_Plot_And_Benchmark_TOR -v -count 1 --tags=performance ./peer/tests/perf/ || true
 
 test_reproduce_tor:
-	@GLOG=no PLOT=1 go test -v ${JSONIFY} -timeout 30m -run Test_Plot_And_Benchmark_TOR_Circuits -v -count 1 --tags=performance ./peer/tests/perf/ || true
+	@GLOG=no PLOT=1 go test -v ${JSONIFY} -timeout 30m -run Test_Plot_And_Benchmark_TOR -v -count 1 --tags=performance ./peer/tests/perf/ || true
 
 lint:
 	# Coding style static check.

@@ -47,7 +47,7 @@ func Build3HopCircuit(t *testing.T) (client, guard, middle, exit z.TestNode, cir
 	// Populate onion keys
 	z.PopulateOnionKeys(nodes)
 
-	hops := [3]string{guard.GetAddr(), middle.GetAddr(), exit.GetAddr()}
+	hops := []string{guard.GetAddr(), middle.GetAddr(), exit.GetAddr()}
 
 	var err error
 	circID, err = client.Peer.BuildCircuit(hops, 5*time.Second)
@@ -99,7 +99,7 @@ func runLatencyBenchmark(b *testing.B, congestionControl bool) {
 		time.Sleep(100 * time.Millisecond)
 		z.PopulateOnionKeys(nodes)
 
-		hops := [3]string{guard.GetAddr(), middle.GetAddr(), exit.GetAddr()}
+		hops := []string{guard.GetAddr(), middle.GetAddr(), exit.GetAddr()}
 		payload := []byte("ping")
 
 		var totalColdTime time.Duration
@@ -131,8 +131,8 @@ func runLatencyBenchmark(b *testing.B, congestionControl bool) {
 
 			// Wait for echo
 			timeout := time.After(5 * time.Second)
-			ticker := time.NewTicker(10 * time.Millisecond)
-			
+			ticker := time.NewTicker(1 * time.Millisecond)
+
 			received := false
 			for !received {
 				select {
@@ -154,7 +154,7 @@ func runLatencyBenchmark(b *testing.B, congestionControl bool) {
 			require.NoError(b, err)
 
 			timeout2 := time.After(5 * time.Second)
-			ticker2 := time.NewTicker(10 * time.Millisecond)
+			ticker2 := time.NewTicker(1 * time.Millisecond)
 			received2 := false
 			for !received2 {
 				select {
@@ -192,7 +192,7 @@ func runThroughputBenchmark(b *testing.B, congestionControl bool) {
 	b.Run(name, func(b *testing.B) {
 		// Setup nodes
 		transp := channelFac()
-		
+
 		client := z.NewTestNode(b, peerFac, transp, "127.0.0.1:0")
 		guard := z.NewTestNode(b, peerFac, transp, "127.0.0.1:0")
 		middle := z.NewTestNode(b, peerFac, transp, "127.0.0.1:0")
@@ -222,8 +222,8 @@ func runThroughputBenchmark(b *testing.B, congestionControl bool) {
 		time.Sleep(100 * time.Millisecond)
 		z.PopulateOnionKeys(nodes)
 
-		hops := [3]string{guard.GetAddr(), middle.GetAddr(), exit.GetAddr()}
-		
+		hops := []string{guard.GetAddr(), middle.GetAddr(), exit.GetAddr()}
+
 		circID, err := client.Peer.BuildCircuit(hops, 5*time.Second)
 		require.NoError(b, err)
 		require.NoError(b, err)
@@ -243,10 +243,10 @@ func runThroughputBenchmark(b *testing.B, congestionControl bool) {
 		require.True(b, ready, "Stream failed to open")
 
 		// Prepare payload
-		payloadSize := 400 // Reduced from 1024 to fit in a single cell
+		payloadSize := 498
 		b.SetBytes(int64(payloadSize))
 		payload := make([]byte, payloadSize)
-		
+
 		// Determine delay based on congestion control setting
 		var sendDelay time.Duration
 		if congestionControl {
@@ -260,7 +260,7 @@ func runThroughputBenchmark(b *testing.B, congestionControl bool) {
 		}
 
 		b.ResetTimer()
-		
+
 		// Send b.N packets
 		for i := 0; i < b.N; i++ {
 			// Retry sending if it fails (e.g. due to flow control)
@@ -274,12 +274,12 @@ func runThroughputBenchmark(b *testing.B, congestionControl bool) {
 
 			time.Sleep(sendDelay)
 		}
-		
+
 		// Wait for packets to drain with a timeout
 		timeout := time.After(5 * time.Second)
 		ticker := time.NewTicker(100 * time.Millisecond)
 		defer ticker.Stop()
-		
+
 		var finalReceived int
 		done := false
 		for !done {
@@ -299,7 +299,7 @@ func runThroughputBenchmark(b *testing.B, congestionControl bool) {
 
 		loss := b.N - finalReceived
 		lossPct := float64(loss) / float64(b.N) * 100.0
-		
+
 		b.ReportMetric(float64(lossPct), "loss_pct")
 		b.ReportMetric(float64(finalReceived), "pkts_recv")
 
@@ -307,9 +307,9 @@ func runThroughputBenchmark(b *testing.B, congestionControl bool) {
 			msPerOp := float64(b.Elapsed().Nanoseconds()) / 1e6 / float64(b.N)
 			b.ReportMetric(msPerOp, "ms/op")
 		}
-		
+
 		if loss > 0 {
-			b.Logf("Packet Loss Detected: Sent=%d, Recv=%d, Loss=%d (%.2f%%)", 
+			b.Logf("Packet Loss Detected: Sent=%d, Recv=%d, Loss=%d (%.2f%%)",
 				b.N, finalReceived, loss, lossPct)
 		} else {
 			b.Logf("Success: Sent=%d, Recv=%d, Loss=0%%", b.N, finalReceived)
