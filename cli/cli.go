@@ -63,9 +63,9 @@ func init() {
 }
 
 func main() {
-	log.Info().Msg("==============================================")
-	log.Info().Msg(" Welcome To TOR! Let's Keep You Anonymous!")
-	log.Info().Msg("==============================================")
+	log.Info().Msg("================================================")
+	log.Info().Msg(" Welcome To OnionPeer! Let's Keep You Anonymous!")
+	log.Info().Msg("================================================")
 	log.Info().Msg("")
 
 	// Step 1: Get number of nodes
@@ -248,10 +248,11 @@ func runInteractiveMenu() {
 		log.Info().Msg("7. View server messages")
 		log.Info().Msg("8. Close a stream")
 		log.Info().Msg("9. Close a circuit")
-		log.Info().Msg("10. Show status")
-		log.Info().Msg("11. Exit")
+		log.Info().Msg("10. Unregister a server")
+		log.Info().Msg("11. Show status")
+		log.Info().Msg("12. Exit")
 		log.Info().Msg("==============================================")
-		log.Info().Msg("Choose an option (1-11): ")
+		log.Info().Msg("Choose an option (1-12): ")
 
 		input, _ := reader.ReadString('\n')
 		input = strings.TrimSpace(input)
@@ -276,11 +277,13 @@ func runInteractiveMenu() {
 		case "9":
 			handleCloseCircuit()
 		case "10":
-			handleShowStatus()
+			handleUnregisterServer()
 		case "11":
+			handleShowStatus()
+		case "12":
 			return
 		default:
-			log.Info().Msg("Invalid option. Please choose 1-11.")
+			log.Info().Msg("Invalid option. Please choose 1-12.")
 		}
 	}
 }
@@ -783,6 +786,15 @@ func handleCloseCircuit() {
 		}
 	}
 
+	// Check if there are servers using this circuit's exit node
+	exitNodeAddr := circInfo.hops[2]
+	serversOnExit := []int{}
+	for servID, info := range servers {
+		if info.exitNodeAddr == exitNodeAddr {
+			serversOnExit = append(serversOnExit, servID)
+		}
+	}
+
 	if len(streamsOnCircuit) > 0 {
 		log.Warn().Msgf("Warning: Circuit #%d has %d open stream(s)", userCircID, len(streamsOnCircuit))
 		log.Info().Msg("Close them first? (y/n): ")
@@ -801,6 +813,24 @@ func handleCloseCircuit() {
 				}
 				delete(streams, strID)
 			}
+			time.Sleep(200 * time.Millisecond)
+		}
+	}
+
+	// Check if servers need to be unregistered
+	if len(serversOnExit) > 0 {
+		log.Warn().Msgf("Warning: %d server(s) are registered with Exit Node %d", len(serversOnExit), getNodeNumber(exitNodeAddr))
+		log.Info().Msg("Unregister them? (y/n): ")
+		confirm, _ := reader.ReadString('\n')
+		confirm = strings.TrimSpace(strings.ToLower(confirm))
+
+		if confirm == "y" || confirm == "yes" {
+			for _, servID := range serversOnExit {
+				info := servers[servID]
+				log.Info().Msgf("Unregistering Server #%d (Node %d serving %s)", servID, info.nodeIdx+1, info.targetAddr)
+				delete(servers, servID)
+			}
+			log.Info().Msg("Servers unregistered from local tracking.")
 			time.Sleep(200 * time.Millisecond)
 		}
 	}
@@ -862,6 +892,46 @@ func handleShowStatus() {
 				userID, exitNodeNum, info.nodeIdx+1, info.targetAddr)
 		}
 	}
+}
+
+func handleUnregisterServer() {
+	log.Info().Msg("\n--- UNREGISTER SERVER ---")
+
+	if len(servers) == 0 {
+		log.Info().Msg("No servers registered.")
+		return
+	}
+
+	log.Info().Msg("\nRegistered servers:")
+	for userID, info := range servers {
+		exitNodeNum := getNodeNumber(info.exitNodeAddr)
+		log.Info().Msgf("\tServer #%d: Node %d serving %s (Exit: Node %d)",
+			userID, info.nodeIdx+1, info.targetAddr, exitNodeNum)
+	}
+
+	log.Info().Msg("\nEnter server number to unregister: ")
+	input, _ := reader.ReadString('\n')
+	input = strings.TrimSpace(input)
+	userServID, err := strconv.Atoi(input)
+	if err != nil {
+		log.Info().Msg("Invalid server number")
+		return
+	}
+
+	info, exists := servers[userServID]
+	if !exists {
+		log.Info().Msg("Server not found")
+		return
+	}
+
+	log.Info().Msgf("\nUnregistering Server #%d (Node %d serving %s via Exit Node %d)...",
+		userServID, info.nodeIdx+1, info.targetAddr, getNodeNumber(info.exitNodeAddr))
+
+	delete(servers, userServID)
+	log.Info().Msgf("Server #%d unregistered successfully!", userServID)
+	log.Info().Msg("Note: This only removes the local tracking. The server node may continue to receive traffic from the exit node.")
+
+	time.Sleep(200 * time.Millisecond)
 }
 
 func cleanupNodes() {

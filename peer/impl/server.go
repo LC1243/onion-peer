@@ -196,7 +196,7 @@ func (n *node) handleServerReplyData(circID uint16, streamID uint16, data []byte
 
 	// Send reply with flow control
 	go func() {
-		if n.congestionControl {
+		if n.congestionControl.Load() {
 			n.circuitsMu.Lock()
 			for circ.PackageWindow <= 0 {
 				circ.WindowCond.Wait()
