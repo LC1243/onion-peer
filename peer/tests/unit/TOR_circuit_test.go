@@ -65,7 +65,7 @@ func Test_TOR_Circuit_BuildCircuit_ThreeHops(t *testing.T) {
 	// Populate onion public keys for all nodes
 	z.PopulateOnionKeys(nodes)
 
-	hops := [3]string{guard.GetAddr(), middle.GetAddr(), exit.GetAddr()}
+	hops := []string{guard.GetAddr(), middle.GetAddr(), exit.GetAddr()}
 
 	// Build the circuit with a 5 second timeout
 	circID, err := client.Peer.BuildCircuit(hops, 5*time.Second)
@@ -73,6 +73,51 @@ func Test_TOR_Circuit_BuildCircuit_ThreeHops(t *testing.T) {
 	require.NotZero(t, circID, "Circuit ID should be non-zero")
 
 	t.Logf("Successfully built circuit %d through %v", circID, hops)
+}
+
+// Test_TOR_Circuit_BuildCircuit_FiveHops tests building a complete 3-hop circuit
+func Test_TOR_Circuit_BuildCircuit_FiveHops(t *testing.T) {
+	transp := channelFac()
+
+	client := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer client.Stop()
+
+	relays := []z.TestNode{
+		z.NewTestNode(t, peerFac, transp, "127.0.0.1:0"),
+		z.NewTestNode(t, peerFac, transp, "127.0.0.1:0"),
+		z.NewTestNode(t, peerFac, transp, "127.0.0.1:0"),
+		z.NewTestNode(t, peerFac, transp, "127.0.0.1:0"),
+		z.NewTestNode(t, peerFac, transp, "127.0.0.1:0"),
+	}
+	for _, r := range relays {
+		defer r.Stop()
+	}
+
+	nodes := append([]z.TestNode{client}, relays...)
+	for i, n1 := range nodes {
+		for j, n2 := range nodes {
+			if i != j {
+				n1.AddPeer(n2.GetAddr())
+			}
+		}
+	}
+
+	time.Sleep(100 * time.Millisecond)
+	z.PopulateOnionKeys(nodes)
+
+	hops := []string{
+		relays[0].GetAddr(),
+		relays[1].GetAddr(),
+		relays[2].GetAddr(),
+		relays[3].GetAddr(),
+		relays[4].GetAddr(),
+	}
+
+	circID, err := client.Peer.BuildCircuit(hops, 5*time.Second)
+	require.NoError(t, err)
+	require.NotZero(t, circID)
+
+	t.Logf("Built 5-hop circuit %d", circID)
 }
 
 // Test_TOR_Circuit_BuildCircuit_Timeout tests that circuit building fails properly with unreachable nodes
@@ -85,7 +130,7 @@ func Test_TOR_Circuit_BuildCircuit_Timeout(t *testing.T) {
 
 	// Try to build a circuit to non-existent nodes
 	// These addresses are in routing table but won't respond
-	hops := [3]string{"127.0.0.1:9991", "127.0.0.1:9992", "127.0.0.1:9993"}
+	hops := []string{"127.0.0.1:9991", "127.0.0.1:9992", "127.0.0.1:9993"}
 
 	// Add fake routing entries
 	client.SetRoutingEntry(hops[0], hops[0])
@@ -129,7 +174,7 @@ func Test_TOR_Circuit_MultipleCircuits(t *testing.T) {
 	// Populate onion public keys for all nodes
 	z.PopulateOnionKeys(nodes)
 
-	hops := [3]string{guard.GetAddr(), middle.GetAddr(), exit.GetAddr()}
+	hops := []string{guard.GetAddr(), middle.GetAddr(), exit.GetAddr()}
 
 	// Build two circuits
 	circID1, err := client.Peer.BuildCircuit(hops, 5*time.Second)
@@ -189,7 +234,7 @@ func Test_TOR_Circuit_Destroy_ClientInitiated_Success(t *testing.T) {
 	// Populate onion public keys for all nodes
 	z.PopulateOnionKeys(nodes)
 
-	hops := [3]string{guard.GetAddr(), middle.GetAddr(), exit.GetAddr()}
+	hops := []string{guard.GetAddr(), middle.GetAddr(), exit.GetAddr()}
 
 	// Build the circuit with a 5 second timeout
 	circID, err := client.Peer.BuildCircuit(hops, 5*time.Second)
@@ -254,7 +299,7 @@ func Test_TOR_Circuit_Destroy_RelayInitiated_Success(t *testing.T) {
 	// Populate onion public keys for all nodes
 	z.PopulateOnionKeys(nodes)
 
-	hops := [3]string{guard.GetAddr(), middle.GetAddr(), exit.GetAddr()}
+	hops := []string{guard.GetAddr(), middle.GetAddr(), exit.GetAddr()}
 
 	// Build the circuit with a 5 second timeout
 	circID, err := client.Peer.BuildCircuit(hops, 5*time.Second)
@@ -283,6 +328,59 @@ func Test_TOR_Circuit_Destroy_RelayInitiated_Success(t *testing.T) {
 	// Destroying again should fail
 	err = guard.Peer.RelayDestroyCircuit(circID, client.GetAddr())
 	require.Error(t, err, "destroying again should fail for non-existing circuit")
+}
+
+// Test_TOR_Circuit_Destroy_MultiHop_Propagation tests that multiple a circuit with more than 3 hops can be destroyed
+func Test_TOR_Circuit_Destroy_MultiHop_Propagation(t *testing.T) {
+	transp := channelFac()
+
+	client := z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	defer client.Stop()
+
+	relays := []z.TestNode{
+		z.NewTestNode(t, peerFac, transp, "127.0.0.1:0"),
+		z.NewTestNode(t, peerFac, transp, "127.0.0.1:0"),
+		z.NewTestNode(t, peerFac, transp, "127.0.0.1:0"),
+		z.NewTestNode(t, peerFac, transp, "127.0.0.1:0"),
+		z.NewTestNode(t, peerFac, transp, "127.0.0.1:0"),
+	}
+	for _, r := range relays {
+		defer r.Stop()
+	}
+
+	nodes := append([]z.TestNode{client}, relays...)
+	for i, n1 := range nodes {
+		for j, n2 := range nodes {
+			if i != j {
+				n1.AddPeer(n2.GetAddr())
+			}
+		}
+	}
+
+	time.Sleep(100 * time.Millisecond)
+	z.PopulateOnionKeys(nodes)
+
+	hops := []string{
+		relays[0].GetAddr(),
+		relays[1].GetAddr(),
+		relays[2].GetAddr(),
+		relays[3].GetAddr(),
+		relays[4].GetAddr(),
+	}
+
+	circID, err := client.Peer.BuildCircuit(hops, 5*time.Second)
+	require.NoError(t, err)
+
+	err = client.Peer.DestroyCircuit(circID)
+	require.NoError(t, err)
+
+	time.Sleep(200 * time.Millisecond)
+
+	// Assert no relay has leftover circuit state
+	for _, r := range relays {
+		require.Equal(t, 0, r.Peer.GetCircuitsNbr(),
+			"relay %s should have no remaining circuits", r.GetAddr())
+	}
 }
 
 // Test_TOR_Circuit_Cleanup_ClientInitiated_Success tests that multiple circuits can be built and exist simultaneously
@@ -336,8 +434,8 @@ func Test_TOR_Circuit_Cleanup_ClientInitiated_Success(t *testing.T) {
 	z.PopulateOnionKeys(nodes1)
 	z.PopulateOnionKeys(nodes2)
 
-	hops1 := [3]string{guard1.GetAddr(), middle.GetAddr(), exit1.GetAddr()}
-	hops2 := [3]string{guard2.GetAddr(), middle.GetAddr(), exit2.GetAddr()}
+	hops1 := []string{guard1.GetAddr(), middle.GetAddr(), exit1.GetAddr()}
+	hops2 := []string{guard2.GetAddr(), middle.GetAddr(), exit2.GetAddr()}
 
 	// Build two circuits
 	_, err := client1.Peer.BuildCircuit(hops1, 5*time.Second)
@@ -405,7 +503,7 @@ func Test_TOR_Congestion_NoPacketLoss(t *testing.T) {
 	z.PopulateOnionKeys(nodes)
 
 	// Build circuit
-	hops := [3]string{guard.GetAddr(), middle.GetAddr(), exit.GetAddr()}
+	hops := []string{guard.GetAddr(), middle.GetAddr(), exit.GetAddr()}
 	circID, err := client.BuildCircuit(hops, 10*time.Second)
 	require.NoError(t, err, "Failed to build circuit")
 

@@ -18,6 +18,7 @@ import (
 	"golang.org/x/crypto/hkdf"
 )
 
+// Designed and debugged with the help of copilot
 // Outline of steps required for circuit Creation:
 // A map of shared secrets and encryption state is maintained per hop in the circuit.
 

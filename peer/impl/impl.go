@@ -83,6 +83,12 @@ func NewPeer(conf peer.Configuration) peer.Peer {
 	n.rendezvousAssoc = make(map[uint16]uint16)
 	n.rendezvousComplete = make(map[uint16]chan struct{})
 
+	// Initialize server-related structures
+	n.serverConnections = make(map[string]string)
+	n.serverReceivedData = make(map[string][][]byte)
+	n.serverConnectionIDs = make(map[string]string)
+	n.serverStreamMap = make(map[string]*serverStreamMapping)
+
 	// Generate onion keypair for this node
 	// Note: In production, this should be loaded from persistent storage
 	// For now, we generate a new keypair each time
@@ -103,6 +109,8 @@ func NewPeer(conf peer.Configuration) peer.Peer {
 		conf.MessageRegistry.RegisterMessageCallback(types.EmptyMessage{}, n.execEmptyMessage)
 
 		conf.MessageRegistry.RegisterMessageCallback(TorCellMessage{}, n.ExecTorCell)
+
+		conf.MessageRegistry.RegisterMessageCallback(types.ServerData{}, n.execServerData)
 	}
 
 	return n
@@ -245,6 +253,21 @@ type node struct {
 	SecurityStats SecurityStats
 	hsdirFragMu   sync.Mutex
 	hsdirFrags    map[fragKey]*fragBuf // MsgID -> buffer
+
+	// Server-related fields unaware of circuits/streams
+	serverConnectionsMu sync.RWMutex
+	serverConnections   map[string]string // targetAddr -> serverAddr
+	serverDataMu        sync.RWMutex
+	serverReceivedData  map[string][][]byte             // exitNodeAddr -> []data at server
+	serverConnectionIDs map[string]string               // exitNodeAddr -> connectionID at server
+	serverStreamMap     map[string]*serverStreamMapping // connectionID -> stream info at exit node
+	serverStreamMapMu   sync.RWMutex
+}
+
+// serverStreamMapping maps a connection ID to circuit/stream at exit node
+type serverStreamMapping struct {
+	circID   uint16
+	streamID uint16
 }
 
 // Start implements peer.Service
