@@ -1662,7 +1662,7 @@ func Test_TOR_HS_Rendezvous_FullHandshake_WithDataExchange_Succeeds(t *testing.T
 	err = alice.Peer.SendStreamData(aliceRPCirc, streamID, testData)
 	require.NoError(t, err, "Alice should be able to send data to Bob")
 
-	time.Sleep(200 * time.Millisecond)
+	time.Sleep(300 * time.Millisecond)
 
 	// Verify Alice sent the data
 	sentPackets, err := alice.Peer.GetStreamPackets(aliceRPCirc, streamID)
@@ -1671,6 +1671,36 @@ func Test_TOR_HS_Rendezvous_FullHandshake_WithDataExchange_Succeeds(t *testing.T
 		"Alice should have sent at least one packet")
 	require.Equal(t, testData, sentPackets[0],
 		"Sent data should match test data")
+
+	// Additional sleep to ensure Bob processes the data
+	time.Sleep(200 * time.Millisecond)
+
+	// Verify Bob received the data
+	// Bob's RP circuit ID is dynamically created, so we need to find it
+	bobCircuits := bob.Peer.GetClientCircuitsNbr()
+	log.Debug().Msgf("Bob has %d client circuits", bobCircuits)
+
+	var bobReceivedData [][]byte
+	foundStream := false
+
+	// Iterate through ALL possible circuit IDs to find Bob's RP circuit with the stream
+	for testCircID := uint16(0); testCircID < 65535 && !foundStream; testCircID++ {
+		if bob.Peer.HasStream(testCircID, streamID) {
+			bobReceivedData, err = bob.Peer.GetReceivedStreamPackets(testCircID, streamID)
+			log.Debug().Msgf("Found stream on circID %d, data length: %d, err: %v", testCircID, len(bobReceivedData), err)
+			if err == nil && len(bobReceivedData) > 0 {
+				foundStream = true
+				log.Debug().Msgf("Bob received data on circuit %d, first 20 bytes: %x", testCircID, bobReceivedData[0][:20])
+				break
+			}
+		}
+	}
+
+	require.True(t, foundStream, "Bob should have received data on the stream")
+	require.GreaterOrEqual(t, len(bobReceivedData), 1,
+		"Bob should have received at least one packet")
+	require.Equal(t, testData, bobReceivedData[0],
+		"Bob's received data should match the data Alice sent")
 
 	// Close the stream
 	err = alice.Peer.CloseStream(aliceRPCirc, streamID)

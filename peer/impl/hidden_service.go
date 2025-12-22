@@ -2155,9 +2155,22 @@ func (n *node) SendRelayRendezvous1(circID uint16,
 		return fmt.Errorf("failed to generate circuit keys from shared secret: %w", err)
 	}
 
+	n.log.Warn().
+		Hex("sharedSecret", sharedSecret[:16]).
+		Hex("forwardKey", cryptoState.ForwardKey[:8]).
+		Hex("backwardKey", cryptoState.BackwardKey[:8]).
+		Msg("Bob: Generated crypto state from shared secret")
+
 	n.cryptoStatesMu.Lock()
 	n.circuitCryptoStates[rpCircID] = append(n.circuitCryptoStates[rpCircID], cryptoState)
 	n.cryptoStatesMu.Unlock()
+
+	// Mark this as a rendezvous circuit
+	n.clientCircuitsMu.Lock()
+	if cc, ok := n.clientCircuits[rpCircID]; ok {
+		cc.IsRendezvous = true
+	}
+	n.clientCircuitsMu.Unlock()
 
 	n.log.Info().
 		Uint16("rpCircID", rpCircID).
@@ -2299,6 +2312,12 @@ func (n *node) HandleRelayRendezvous2(relay RelayCell) error {
 		return err
 	}
 
+	n.log.Warn().
+		Hex("sharedSecret", shared[:16]).
+		Hex("forwardKey", cryptoState.ForwardKey[:8]).
+		Hex("backwardKey", cryptoState.BackwardKey[:8]).
+		Msg("Alice: Generated crypto state from shared secret")
+
 	n.cryptoStatesMu.Lock()
 	n.circuitCryptoStates[st.CircID] = append(n.circuitCryptoStates[st.CircID], cryptoState)
 	n.cryptoStatesMu.Unlock()
@@ -2310,6 +2329,13 @@ func (n *node) HandleRelayRendezvous2(relay RelayCell) error {
 		delete(n.rendezvousComplete, st.CircID)
 	}
 	n.rendezvousCompleteMu.Unlock()
+
+	// Mark Alice's circuit as rendezvous
+	n.clientCircuitsMu.Lock()
+	if cc, ok := n.clientCircuits[st.CircID]; ok {
+		cc.IsRendezvous = true
+	}
+	n.clientCircuitsMu.Unlock()
 
 	n.log.Info().
 		Uint16("circID", relay.CircID).
