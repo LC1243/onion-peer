@@ -81,6 +81,7 @@ func NewPeer(conf peer.Configuration) peer.Peer {
 	n.introAckSuccess = make(map[uint16]bool)
 	n.rendezvousStates = make(map[string]*DhRendezvousState)
 	n.rendezvousAssoc = make(map[uint16]uint16)
+	n.rendezvousComplete = make(map[uint16]chan struct{})
 
 	// Generate onion keypair for this node
 	// Note: In production, this should be loaded from persistent storage
@@ -218,6 +219,9 @@ type node struct {
 
 	rendezvousAssocMu sync.Mutex
 	rendezvousAssoc   map[uint16]uint16 // client circID -> service circID (or inverse)
+
+	rendezvousCompleteMu sync.Mutex
+	rendezvousComplete   map[uint16]chan struct{} // circID -> done
 
 	introAckMu      sync.Mutex
 	introAckCh      map[uint16]chan struct{} // circID -> done
