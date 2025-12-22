@@ -12,7 +12,6 @@ import (
 	"io"
 	"time"
 
-	"github.com/rs/zerolog/log"
 	"golang.org/x/crypto/curve25519"
 )
 
@@ -2271,8 +2270,6 @@ func (n *node) HandleRelayRendezvous1(relay RelayCell, circ *Circuit) error {
 	n.rendezvousAssocMu.Lock()
 	n.rendezvousAssoc[aliceCirc.InCircID] = circ.InCircID
 	n.rendezvousAssoc[circ.InCircID] = aliceCirc.InCircID
-	log.Debug().Msgf("Rendezvous association created: AliceInCirc %d <-> BobOutCirc %d", aliceCirc.InCircID, circ.InCircID)
-	log.Debug().Msgf("Rendezvous association created: BobInCirc %d <-> AliceOutCirc %d", circ.InCircID, aliceCirc.InCircID)
 	n.rendezvousAssocMu.Unlock()
 	return nil
 }
