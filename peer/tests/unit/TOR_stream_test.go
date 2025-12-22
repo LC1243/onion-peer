@@ -12,24 +12,27 @@ import (
 	"go.dedis.ch/cs438/transport/udp"
 )
 
-// Build3HopCircuit builds a 3-hop circuit for use by stream tests.
-func Build3HopCircuit(t *testing.T) (client, guard, middle, exit z.TestNode, circID uint16) {
+// BuildNHopCircuit builds n-hop circuit to be used in tests.
+// relays includes the middle nodes and the exit node.
+func BuildNHopCircuit(t *testing.T, n int) (client z.TestNode, relays []z.TestNode, exit z.TestNode, circID uint16) {
+	require.GreaterOrEqual(t, n, 3)
 	transp := channelFac()
 
 	client = z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
-	guard = z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
-	middle = z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
-	exit = z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+
+	relays = make([]z.TestNode, n)
+	for i := 0; i < n; i++ {
+		relays[i] = z.NewTestNode(t, peerFac, transp, "127.0.0.1:0")
+	}
 
 	t.Cleanup(func() {
-		client.Stop()
-		guard.Stop()
-		middle.Stop()
-		exit.Stop()
+		for _, node := range relays {
+			node.Stop()
+		}
 	})
 
 	// Full mesh routing
-	nodes := []z.TestNode{client, guard, middle, exit}
+	nodes := append([]z.TestNode{client}, relays...)
 	for i, n1 := range nodes {
 		for j, n2 := range nodes {
 			if i != j {
@@ -43,13 +46,17 @@ func Build3HopCircuit(t *testing.T) (client, guard, middle, exit z.TestNode, cir
 	// Populate onion keys
 	z.PopulateOnionKeys(nodes)
 
-	hops := [3]string{guard.GetAddr(), middle.GetAddr(), exit.GetAddr()}
+	hops := make([]string, n)
+	for i := 0; i < n; i++ {
+		hops[i] = relays[i].GetAddr()
+	}
 
 	var err error
 	circID, err = client.Peer.BuildCircuit(hops, 5*time.Second)
 	require.NoError(t, err)
 
-	return client, guard, middle, exit, circID
+	exit = relays[n-1]
+	return client, relays, exit, circID
 }
 
 // getExitCircuitIDWithStreams returns the circuit ID for the exit node that contains streams
@@ -78,7 +85,7 @@ func assertExitHasNoStreams(t *testing.T, exit z.TestNode) {
 
 // Test opening a stream end-to-end
 func Test_TOR_Stream_Open_Succeeds(t *testing.T) {
-	client, _, _, _, circID := Build3HopCircuit(t)
+	client, _, _, circID := BuildNHopCircuit(t, 4)
 
 	streamID, err := client.Peer.OpenStream(circID, "dummy-target:9999")
 	require.NoError(t, err, "OpenStream should succeed")
@@ -89,7 +96,7 @@ func Test_TOR_Stream_Open_Succeeds(t *testing.T) {
 
 // Test closing a stream cleanly with the two-way RELAY_END handshake
 func Test_TOR_Stream_Close_Clean_Shutdown(t *testing.T) {
-	client, _, _, exit, circID := Build3HopCircuit(t)
+	client, _, exit, circID := BuildNHopCircuit(t, 4)
 
 	streamID, err := client.Peer.OpenStream(circID, "app:7777")
 	require.NoError(t, err)
@@ -111,7 +118,7 @@ func Test_TOR_Stream_Close_Clean_Shutdown(t *testing.T) {
 
 // Test double-closing stream — second close must not crash
 func Test_TOR_Stream_Close_Twice_NoPanic(t *testing.T) {
-	client, _, _, exit, circID := Build3HopCircuit(t)
+	client, _, exit, circID := BuildNHopCircuit(t, 3)
 
 	streamID, err := client.Peer.OpenStream(circID, "service:5050")
 	require.NoError(t, err)
@@ -133,7 +140,7 @@ func Test_TOR_Stream_Close_Twice_NoPanic(t *testing.T) {
 
 // Multiple streams on the same circuit should work
 func Test_TOR_Multiple_Streams_On_Same_Circuit(t *testing.T) {
-	client, _, _, exit, circID := Build3HopCircuit(t)
+	client, _, exit, circID := BuildNHopCircuit(t, 3)
 
 	stream1, err := client.Peer.OpenStream(circID, "host1:1111")
 	require.NoError(t, err)
@@ -144,16 +151,16 @@ func Test_TOR_Multiple_Streams_On_Same_Circuit(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 
 	// Both streams must exist
-	require.True(t, client.Peer.ContainsStream(circID, stream1))
-	require.True(t, client.Peer.ContainsStream(circID, stream2))
+	require.True(t, client.Peer.HasStream(circID, stream1))
+	require.True(t, client.Peer.HasStream(circID, stream2))
 
 	exitID := getExitCircuitIDWithStreams(t, exit)
-	require.True(t, exit.Peer.ContainsStream(exitID, stream1))
-	require.True(t, exit.Peer.ContainsStream(exitID, stream2))
+	require.True(t, exit.Peer.HasStream(exitID, stream1))
+	require.True(t, exit.Peer.HasStream(exitID, stream2))
 }
 
 func Test_TOR_Multiple_Streams_With_Single_Close(t *testing.T) {
-	client, _, _, exit, circID := Build3HopCircuit(t)
+	client, _, exit, circID := BuildNHopCircuit(t, 5)
 
 	stream1, err := client.Peer.OpenStream(circID, "host1:1111")
 	require.NoError(t, err)
@@ -188,10 +195,10 @@ func Test_TOR_Multiple_Streams_With_Single_Close(t *testing.T) {
 	require.False(t, client.Peer.HasStream(circID, stream4))
 
 	// stream1 and stream4 should be gone, stream2 and stream3 should remain on exit
-	require.False(t, exit.Peer.ContainsStream(exitID, stream1))
-	require.True(t, exit.Peer.ContainsStream(exitID, stream2))
-	require.True(t, exit.Peer.ContainsStream(exitID, stream3))
-	require.False(t, exit.Peer.ContainsStream(exitID, stream4))
+	require.False(t, exit.Peer.HasStream(exitID, stream1))
+	require.True(t, exit.Peer.HasStream(exitID, stream2))
+	require.True(t, exit.Peer.HasStream(exitID, stream3))
+	require.False(t, exit.Peer.HasStream(exitID, stream4))
 }
 
 // If exit node fails to create socket, stream should immediately close
@@ -202,7 +209,7 @@ func Test_TOR_Stream_Open_Fails_When_Exit_Cannot_Open_Socket(t *testing.T) {
 	})
 	t.Cleanup(func() { impl.SetUDPFactory(udp.NewUDP) })
 
-	client, _, _, exit, circID := Build3HopCircuit(t)
+	client, _, exit, circID := BuildNHopCircuit(t, 5)
 
 	_, _ = client.Peer.OpenStream(circID, "nowhere:1234")
 
@@ -230,7 +237,7 @@ func (fakeFailingTransport) Close() error                { return nil }
 // Test_TOR_Stream_FlowControl tests that stream-level flow control works
 // by sending more data than the initial stream window (500 cells).
 func Test_TOR_Stream_FlowControl(t *testing.T) {
-	client, _, _, _, circID := Build3HopCircuit(t)
+	client, _, _, circID := BuildNHopCircuit(t, 3)
 
 	// Open stream
 	streamID, err := client.Peer.OpenStream(circID, "dummy:1234")
@@ -309,7 +316,7 @@ func Test_TOR_Stream_ClientServerCommunication(t *testing.T) {
 	require.NoError(t, err, "Server should register successfully")
 
 	// Build circuit
-	hops := [3]string{guard.GetAddr(), middle.GetAddr(), exit.GetAddr()}
+	hops := []string{guard.GetAddr(), middle.GetAddr(), exit.GetAddr()}
 	circID, err := client.Peer.BuildCircuit(hops, 5*time.Second)
 	require.NoError(t, err, "Circuit should be built successfully")
 
@@ -406,7 +413,7 @@ func Test_TOR_Multiple_Circuits_Multiple_Streams(t *testing.T) {
 
 	// Circuit 1: Non-intersecting with Circuit 2
 	// Client -> Node1 -> Node2 -> Node3
-	circuit1Hops := [3]string{
+	circuit1Hops := []string{
 		nodes[1].GetAddr(),
 		nodes[2].GetAddr(),
 		nodes[3].GetAddr(),
@@ -414,7 +421,7 @@ func Test_TOR_Multiple_Circuits_Multiple_Streams(t *testing.T) {
 
 	// Circuit 2: Non-intersecting with Circuit 1
 	// Client -> Node4 -> Node5 -> Node6
-	circuit2Hops := [3]string{
+	circuit2Hops := []string{
 		nodes[4].GetAddr(),
 		nodes[5].GetAddr(),
 		nodes[6].GetAddr(),
@@ -422,7 +429,7 @@ func Test_TOR_Multiple_Circuits_Multiple_Streams(t *testing.T) {
 
 	// Circuit 3: Shares middle node (Node8) with Circuit 4
 	// Client -> Node7 -> Node8 -> Node9
-	circuit3Hops := [3]string{
+	circuit3Hops := []string{
 		nodes[7].GetAddr(),
 		nodes[8].GetAddr(),
 		nodes[9].GetAddr(),
@@ -430,7 +437,7 @@ func Test_TOR_Multiple_Circuits_Multiple_Streams(t *testing.T) {
 
 	// Circuit 4: Shares middle node (Node8) with Circuit 3
 	// Client -> Node10 -> Node8 -> Node11
-	circuit4Hops := [3]string{
+	circuit4Hops := []string{
 		nodes[10].GetAddr(),
 		nodes[8].GetAddr(), // Shared middle node
 		nodes[11].GetAddr(),
@@ -518,9 +525,9 @@ func Test_TOR_Multiple_Circuits_Multiple_Streams(t *testing.T) {
 		}
 	}
 	require.NotZero(t, exit1CircID, "Exit1 should have a circuit with streams")
-	require.True(t, exit1.Peer.ContainsStream(exit1CircID, stream1_1),
+	require.True(t, exit1.Peer.HasStream(exit1CircID, stream1_1),
 		"Exit1 should have stream 1_1")
-	require.True(t, exit1.Peer.ContainsStream(exit1CircID, stream1_2),
+	require.True(t, exit1.Peer.HasStream(exit1CircID, stream1_2),
 		"Exit1 should have stream 1_2")
 
 	// Circuit 2 exit is Node6
@@ -537,7 +544,7 @@ func Test_TOR_Multiple_Circuits_Multiple_Streams(t *testing.T) {
 		}
 	}
 	require.NotZero(t, exit2CircID, "Exit2 should have a circuit with streams")
-	require.True(t, exit2.Peer.ContainsStream(exit2CircID, stream2_1),
+	require.True(t, exit2.Peer.HasStream(exit2CircID, stream2_1),
 		"Exit2 should have stream 2_1")
 
 	// Verify the shared middle node (Node8) is handling both circuits 3 and 4

@@ -96,7 +96,8 @@ func Test_TOR_KeyPopulation_WithNilKey(t *testing.T) {
 // cell is dropped by the recipient, preventing data corruption or injection attacks.
 func Test_TOR_Relay_Tampering_Detected(t *testing.T) {
 	// Build a 3-hop circuit
-	client, _, middle, exit, circID := Build3HopCircuit(t)
+	client, relays, exit, circID := BuildNHopCircuit(t, 3)
+	middle := relays[1]
 
 	// Open a stream
 	streamID, err := client.OpenStream(circID, "host:1111")
@@ -175,7 +176,8 @@ func Test_TOR_Relay_Tampering_Detected(t *testing.T) {
 // Digest tampering attacks involve modifying the digest field
 func Test_TOR_Relay_CorruptDigest_Detected(t *testing.T) {
 	// Build a 3-hop circuit
-	client, _, middle, exit, circID := Build3HopCircuit(t)
+	client, relays, exit, circID := BuildNHopCircuit(t, 3)
+	middle := relays[1]
 
 	// Open a stream
 	streamID, err := client.OpenStream(circID, "host:2222")
@@ -295,7 +297,7 @@ func Test_TOR_Circuit_Create_Tampering(t *testing.T) {
 	})
 
 	// Attempt to build circuit - should fail due to tampered CREATE
-	hops := [3]string{guard.GetAddr(), middle.GetAddr(), exit.GetAddr()}
+	hops := []string{guard.GetAddr(), middle.GetAddr(), exit.GetAddr()}
 	_, err := client.Peer.BuildCircuit(hops, 3*time.Second)
 
 	// Circuit building should fail due to handshake failure from tampered CREATE
@@ -358,7 +360,7 @@ func Test_TOR_Circuit_Extended_Tampering(t *testing.T) {
 	})
 
 	// Attempt to build circuit - should fail due to tampered EXTENDED
-	hops := [3]string{guard.GetAddr(), middle.GetAddr(), exit.GetAddr()}
+	hops := []string{guard.GetAddr(), middle.GetAddr(), exit.GetAddr()}
 	_, err := client.Peer.BuildCircuit(hops, 3*time.Second)
 
 	// Circuit building should fail or timeout due to tampered EXTENDED
@@ -371,7 +373,8 @@ func Test_TOR_Circuit_Extended_Tampering(t *testing.T) {
 // Tests that tampering with RELAY_BEGIN cells prevents stream establishment.
 func Test_TOR_Stream_Begin_Tampering(t *testing.T) {
 	// Build a working 3-hop circuit first
-	client, _, middle, _, circID := Build3HopCircuit(t)
+	client, relays, _, circID := BuildNHopCircuit(t, 3)
+	middle := relays[1]
 
 	// Install tamper hook on middle to corrupt RELAY_BEGIN cells
 	type testNode interface {
@@ -428,7 +431,8 @@ func Test_TOR_Stream_Begin_Tampering(t *testing.T) {
 // Tests sending multiple data messages with a configurable number of them being tampered.
 func Test_TOR_Multiple_Data_Messages_Tampering(t *testing.T) {
 	// Build a 3-hop circuit
-	client, _, middle, exit, circID := Build3HopCircuit(t)
+	client, relays, exit, circID := BuildNHopCircuit(t, 3)
+	middle := relays[1]
 
 	// Open a stream
 	streamID, err := client.OpenStream(circID, "host:4444")
@@ -510,7 +514,8 @@ func Test_TOR_Multiple_Data_Messages_Tampering(t *testing.T) {
 // Tests creating multiple streams where some RELAY_BEGIN messages are tampered, ensuring tampered streams fail while others succeed.
 func Test_TOR_Stream_Creation_With_Tampering(t *testing.T) {
 	// Build a 3-hop circuit
-	client, _, middle, _, circID := Build3HopCircuit(t)
+	client, relays, _, circID := BuildNHopCircuit(t, 3)
+	middle := relays[1]
 
 	// Install tamper hook to corrupt specific RELAY_BEGIN messages
 	type testNode interface {
@@ -617,7 +622,3 @@ func Test_TOR_Stream_Creation_With_Tampering(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 	_ = client.DestroyCircuit(circID)
 }
-
-// TODO: Difficult to get right
-// Test_TOR_MultiStream_Isolated_Tampering tests that tampering one message in one stream
-// does not affect messages in other streams, ensuring stream isolation.
