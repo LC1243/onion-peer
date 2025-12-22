@@ -131,7 +131,7 @@ func runLatencyBenchmark(b *testing.B, congestionControl bool) {
 
 			// Wait for echo
 			timeout := time.After(5 * time.Second)
-			ticker := time.NewTicker(10 * time.Millisecond)
+			ticker := time.NewTicker(1 * time.Millisecond)
 
 			received := false
 			for !received {
@@ -154,7 +154,7 @@ func runLatencyBenchmark(b *testing.B, congestionControl bool) {
 			require.NoError(b, err)
 
 			timeout2 := time.After(5 * time.Second)
-			ticker2 := time.NewTicker(10 * time.Millisecond)
+			ticker2 := time.NewTicker(1 * time.Millisecond)
 			received2 := false
 			for !received2 {
 				select {
