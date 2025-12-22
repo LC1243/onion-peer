@@ -55,32 +55,37 @@ go tool cover -html=peer.coverage.out -o peer_coverage.html
 firefox peer_coverage.html
 ```
 
-## Quick setup (CHANGEME TO CLI)
+## CLI
 
-Install go = 1.23.
-
-Run a node:
+To run our CLI, you can execute the following command: 
 
 ```sh
-cd gui
-go run gui.go start
+cli-run
 ```
 
-Then open the web GUI page `gui/web/index.html` and enter the peer's proxy
-address provided by the peer's log: `proxy server is ready to handle requests at
-'127.0.0.1:xxxx'`. You can run as many peers as wanted and connect them together
-using the "routing table" > "add peer" section in the WEB GUI.
+You will be presented with the following menu, in which you can run our system:
+```
+==============================================
+ Welcome To TOR! Let's Keep You Anonymous!
+==============================================
 
-## Screenshots
+Enter number of nodes to create (minimum 4): 
+```
 
-1. Connect to a peer's proxy
+After choosing the number of nodes, you will be presented with the main menu and the available commands:
 
-<img src="docs/assets/connect.png" width="500px">
+```
+==============================================
+  MAIN MENU
+==============================================
+1. Create a new circuit
+2. Create a new stream
+3. Send a message
+4. Close a stream
+5. Close a circuit
+6. Show status
+7. Exit
+==============================================
+Choose an option (1-7):
+```
 
-2. Add a peer
-
-<img src="docs/assets/add_peer.png" width="500px">
-
-3. Exchange chat messages
-
-<img src="docs/assets/unicast_chat.png" width="500px">
