@@ -2464,6 +2464,7 @@ func (n *node) ConnectToHiddenService(serviceID string, HSDirCircID uint16) (cir
 					Msg("failed to open stream to hidden service via rendezvous point")
 				continue
 			}
+			time.Sleep(200 * time.Millisecond) // wait a bit for the stream to be registered
 			streamFound := n.HasStream(rpCircID, streamId)
 			if !streamFound {
 				n.log.Error().
