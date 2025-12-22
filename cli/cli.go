@@ -778,63 +778,10 @@ func handleCloseCircuit() {
 		return
 	}
 
-	// Check if there are streams on this circuit
-	streamsOnCircuit := []int{}
-	for strID, info := range streams {
-		if info.userCircID == userCircID {
-			streamsOnCircuit = append(streamsOnCircuit, strID)
-		}
-	}
+	// Close streams and unregister servers if needed
+	closeStreamsAndServersForCircuit(userCircID, circInfo)
 
-	// Check if there are servers using this circuit's exit node
-	exitNodeAddr := circInfo.hops[2]
-	serversOnExit := []int{}
-	for servID, info := range servers {
-		if info.exitNodeAddr == exitNodeAddr {
-			serversOnExit = append(serversOnExit, servID)
-		}
-	}
-
-	if len(streamsOnCircuit) > 0 {
-		log.Warn().Msgf("Warning: Circuit #%d has %d open stream(s)", userCircID, len(streamsOnCircuit))
-		log.Info().Msg("Close them first? (y/n): ")
-		confirm, _ := reader.ReadString('\n')
-		confirm = strings.TrimSpace(strings.ToLower(confirm))
-
-		if confirm == "y" || confirm == "yes" {
-			for _, strID := range streamsOnCircuit {
-				info := streams[strID]
-				client := nodes[0]
-				err := client.CloseStream(info.circuitID, info.streamID)
-				if err != nil {
-					log.Error().Msgf("Failed to close stream #%d: %v", strID, err)
-				} else {
-					log.Info().Msgf("Closed stream #%d", strID)
-				}
-				delete(streams, strID)
-			}
-			time.Sleep(200 * time.Millisecond)
-		}
-	}
-
-	// Check if servers need to be unregistered
-	if len(serversOnExit) > 0 {
-		log.Warn().Msgf("Warning: %d server(s) are registered with Exit Node %d", len(serversOnExit), getNodeNumber(exitNodeAddr))
-		log.Info().Msg("Unregister them? (y/n): ")
-		confirm, _ := reader.ReadString('\n')
-		confirm = strings.TrimSpace(strings.ToLower(confirm))
-
-		if confirm == "y" || confirm == "yes" {
-			for _, servID := range serversOnExit {
-				info := servers[servID]
-				log.Info().Msgf("Unregistering Server #%d (Node %d serving %s)", servID, info.nodeIdx+1, info.targetAddr)
-				delete(servers, servID)
-			}
-			log.Info().Msg("Servers unregistered from local tracking.")
-			time.Sleep(200 * time.Millisecond)
-		}
-	}
-
+	// Destroy the circuit
 	log.Info().Msgf("\nDestroying circuit #%d...", userCircID)
 	client := nodes[0]
 	err = client.DestroyCircuit(circInfo.circID)
@@ -847,6 +794,86 @@ func handleCloseCircuit() {
 	log.Info().Msgf("Circuit #%d destroyed successfully!", userCircID)
 
 	time.Sleep(200 * time.Millisecond)
+}
+
+func closeStreamsAndServersForCircuit(userCircID int, circInfo circuitInfo) {
+	// Check if there are streams on this circuit
+	streamsOnCircuit := findStreamsOnCircuit(userCircID)
+	closeStreamsIfConfirmed(userCircID, streamsOnCircuit)
+
+	// Check if there are servers using this circuit's exit node
+	exitNodeAddr := circInfo.hops[2]
+	serversOnExit := findServersOnExitNode(exitNodeAddr)
+	unregisterServersIfConfirmed(exitNodeAddr, serversOnExit)
+}
+
+func findStreamsOnCircuit(userCircID int) []int {
+	streamsOnCircuit := []int{}
+	for strID, info := range streams {
+		if info.userCircID == userCircID {
+			streamsOnCircuit = append(streamsOnCircuit, strID)
+		}
+	}
+	return streamsOnCircuit
+}
+
+func findServersOnExitNode(exitNodeAddr string) []int {
+	serversOnExit := []int{}
+	for servID, info := range servers {
+		if info.exitNodeAddr == exitNodeAddr {
+			serversOnExit = append(serversOnExit, servID)
+		}
+	}
+	return serversOnExit
+}
+
+func closeStreamsIfConfirmed(userCircID int, streamsOnCircuit []int) {
+	if len(streamsOnCircuit) == 0 {
+		return
+	}
+
+	log.Warn().Msgf("Warning: Circuit #%d has %d open stream(s)", userCircID, len(streamsOnCircuit))
+	log.Info().Msg("Close them first? (y/n): ")
+	confirm, _ := reader.ReadString('\n')
+	confirm = strings.TrimSpace(strings.ToLower(confirm))
+
+	if confirm == "y" || confirm == "yes" {
+		for _, strID := range streamsOnCircuit {
+			info := streams[strID]
+			client := nodes[0]
+			err := client.CloseStream(info.circuitID, info.streamID)
+			if err != nil {
+				log.Error().Msgf("Failed to close stream #%d: %v", strID, err)
+			} else {
+				log.Info().Msgf("Closed stream #%d", strID)
+			}
+			delete(streams, strID)
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+}
+
+func unregisterServersIfConfirmed(exitNodeAddr string, serversOnExit []int) {
+	if len(serversOnExit) == 0 {
+		return
+	}
+
+	log.Warn().Msgf("Warning: %d server(s) are registered with Exit Node %d",
+		len(serversOnExit), getNodeNumber(exitNodeAddr))
+	log.Info().Msg("Unregister them? (y/n): ")
+	confirm, _ := reader.ReadString('\n')
+	confirm = strings.TrimSpace(strings.ToLower(confirm))
+
+	if confirm == "y" || confirm == "yes" {
+		for _, servID := range serversOnExit {
+			info := servers[servID]
+			log.Info().Msgf("Unregistering Server #%d (Node %d serving %s)",
+				servID, info.nodeIdx+1, info.targetAddr)
+			delete(servers, servID)
+		}
+		log.Info().Msg("Servers unregistered from local tracking.")
+		time.Sleep(200 * time.Millisecond)
+	}
 }
 
 func getNodeNumber(addr string) int {
@@ -929,7 +956,8 @@ func handleUnregisterServer() {
 
 	delete(servers, userServID)
 	log.Info().Msgf("Server #%d unregistered successfully!", userServID)
-	log.Info().Msg("Note: This only removes the local tracking. The server node may continue to receive traffic from the exit node.")
+	log.Info().Msg("Note: This only removes the local tracking. " +
+		"The server node may continue to receive traffic from the exit node.")
 
 	time.Sleep(200 * time.Millisecond)
 }
