@@ -22,10 +22,12 @@ import (
 var (
 	nodes      []peer.Peer
 	nodeAddrs  []string
-	circuits   map[int]uint16 // map from circuit number to actual circuit ID
+	circuits   map[int]circuitInfo // map from circuit number to circuit info
 	streams    map[int]streamInfo
+	servers    map[int]serverInfo // map from server number to server info
 	nextCircID = 1
 	nextStrID  = 1
+	nextServID = 1
 	log        zerolog.Logger
 	reader     *bufio.Reader
 )
@@ -34,6 +36,18 @@ type streamInfo struct {
 	circuitID  uint16
 	streamID   uint16
 	userCircID int
+	targetAddr string
+}
+
+type circuitInfo struct {
+	circID uint16
+	hops   [3]string // Guard, Middle, Exit addresses
+}
+
+type serverInfo struct {
+	nodeIdx      int
+	exitNodeAddr string
+	targetAddr   string
 }
 
 func init() {
@@ -49,9 +63,9 @@ func init() {
 }
 
 func main() {
-	log.Info().Msg("==============================================")
-	log.Info().Msg(" Welcome To TOR! Let's Keep You Anonymous!")
-	log.Info().Msg("==============================================")
+	log.Info().Msg("================================================")
+	log.Info().Msg(" Welcome To OnionPeer! Let's Keep You Anonymous!")
+	log.Info().Msg("================================================")
 	log.Info().Msg("")
 
 	// Step 1: Get number of nodes
@@ -102,8 +116,9 @@ func promptForNodeCount() int {
 }
 
 func createNodes(numNodes int) {
-	circuits = make(map[int]uint16)
+	circuits = make(map[int]circuitInfo)
 	streams = make(map[int]streamInfo)
+	servers = make(map[int]serverInfo)
 
 	transp := channel.NewTransport()
 
@@ -197,10 +212,10 @@ func createRandomCircuit() {
 		nodeAddrs[relayIndices[2]],
 	}
 
-	log.Info().Msgf("  Client: Node 1 (%s)", nodeAddrs[clientIdx])
-	log.Info().Msgf("  Guard:  Node %d (%s)", relayIndices[0]+1, hops[0])
-	log.Info().Msgf("  Middle: Node %d (%s)", relayIndices[1]+1, hops[1])
-	log.Info().Msgf("  Exit:   Node %d (%s)", relayIndices[2]+1, hops[2])
+	log.Info().Msgf("\tClient: Node 1 (%s)", nodeAddrs[clientIdx])
+	log.Info().Msgf("\tGuard:  Node %d (%s)", relayIndices[0]+1, hops[0])
+	log.Info().Msgf("\tMiddle: Node %d (%s)", relayIndices[1]+1, hops[1])
+	log.Info().Msgf("\tExit:   Node %d (%s)", relayIndices[2]+1, hops[2])
 
 	log.Info().Msg("\nBuilding circuit...")
 	circID, err := client.BuildCircuit(hops, 10*time.Second)
@@ -209,7 +224,10 @@ func createRandomCircuit() {
 		return
 	}
 
-	circuits[nextCircID] = circID
+	circuits[nextCircID] = circuitInfo{
+		circID: circID,
+		hops:   hops,
+	}
 	log.Info().Msgf("Circuit #%d created successfully! (Internal ID: %d)", nextCircID, circID)
 	nextCircID++
 
@@ -223,13 +241,18 @@ func runInteractiveMenu() {
 		log.Info().Msg("==============================================")
 		log.Info().Msg("1. Create a new circuit")
 		log.Info().Msg("2. Create a new stream")
-		log.Info().Msg("3. Send a message")
-		log.Info().Msg("4. Close a stream")
-		log.Info().Msg("5. Close a circuit")
-		log.Info().Msg("6. Show status")
-		log.Info().Msg("7. Exit")
+		log.Info().Msg("3. Send a message (client)")
+		log.Info().Msg("4. Register a server node")
+		log.Info().Msg("5. Send a message (server)")
+		log.Info().Msg("6. View client messages")
+		log.Info().Msg("7. View server messages")
+		log.Info().Msg("8. Close a stream")
+		log.Info().Msg("9. Close a circuit")
+		log.Info().Msg("10. Unregister a server")
+		log.Info().Msg("11. Show status")
+		log.Info().Msg("12. Exit")
 		log.Info().Msg("==============================================")
-		log.Info().Msg("Choose an option (1-7): ")
+		log.Info().Msg("Choose an option (1-12): ")
 
 		input, _ := reader.ReadString('\n')
 		input = strings.TrimSpace(input)
@@ -242,15 +265,25 @@ func runInteractiveMenu() {
 		case "3":
 			handleSendMessage()
 		case "4":
-			handleCloseStream()
+			handleRegisterServer()
 		case "5":
-			handleCloseCircuit()
+			handleServerSendMessage()
 		case "6":
-			handleShowStatus()
+			handleViewClientMessages()
 		case "7":
+			handleViewServerMessages()
+		case "8":
+			handleCloseStream()
+		case "9":
+			handleCloseCircuit()
+		case "10":
+			handleUnregisterServer()
+		case "11":
+			handleShowStatus()
+		case "12":
 			return
 		default:
-			log.Info().Msg("Invalid option. Please choose 1-7.")
+			log.Info().Msg("Invalid option. Please choose 1-12.")
 		}
 	}
 }
@@ -294,7 +327,10 @@ func handleCreateCircuit() {
 		return
 	}
 
-	circuits[nextCircID] = circID
+	circuits[nextCircID] = circuitInfo{
+		circID: circID,
+		hops:   hops,
+	}
 	log.Info().Msgf("Circuit #%d created successfully! (Internal ID: %d)", nextCircID, circID)
 	nextCircID++
 
@@ -310,8 +346,8 @@ func handleCreateStream() {
 	}
 
 	log.Info().Msg("\nAvailable circuits:")
-	for userID, circID := range circuits {
-		log.Info().Msgf("\tCircuit #%d (Internal ID: %d)", userID, circID)
+	for userID, circInfo := range circuits {
+		log.Info().Msgf("\tCircuit #%d (Internal ID: %d)", userID, circInfo.circID)
 	}
 
 	log.Info().Msg("\nEnter circuit number to use: ")
@@ -323,7 +359,7 @@ func handleCreateStream() {
 		return
 	}
 
-	circID, exists := circuits[userCircID]
+	circInfo, exists := circuits[userCircID]
 	if !exists {
 		log.Info().Msg("Circuit not found")
 		return
@@ -335,16 +371,17 @@ func handleCreateStream() {
 
 	log.Info().Msgf("\nOpening stream to %s...", targetAddr)
 	client := nodes[0] // Always use first node as client
-	streamID, err := client.OpenStream(circID, targetAddr)
+	streamID, err := client.OpenStream(circInfo.circID, targetAddr)
 	if err != nil {
 		log.Error().Msgf("Failed to open stream: %v", err)
 		return
 	}
 
 	streams[nextStrID] = streamInfo{
-		circuitID:  circID,
+		circuitID:  circInfo.circID,
 		streamID:   streamID,
 		userCircID: userCircID,
+		targetAddr: targetAddr,
 	}
 
 	log.Info().Msgf("Stream #%d created successfully! (Internal ID: %d, Circuit: #%d)",
@@ -401,18 +438,273 @@ func handleSendMessage() {
 	}
 
 	log.Info().Msg("Message sent successfully!")
-	time.Sleep(300 * time.Millisecond)
+	time.Sleep(500 * time.Millisecond)
 
-	log.Info().Msg("\nChecking for response from exit node...")
+	log.Info().Msg("\nChecking for echo response from server...")
 	receivedPackets, err := client.GetReceivedStreamPackets(info.circuitID, info.streamID)
 	if err == nil && len(receivedPackets) > 0 {
-		log.Info().Msg("Received responses:")
+		log.Info().Msg("Received echo:")
 		for i, packet := range receivedPackets {
-			log.Info().Msgf("\tResponse %d: %s", i+1, string(packet))
+			log.Info().Msgf("\tEcho %d: %s", i+1, string(packet))
 		}
+		log.Info().Msg("\nTwo-way communication established!")
+		log.Info().Msg("\tThe server can now send messages back to you using option 5.")
 	} else {
-		log.Info().Msg("No response received!")
+		log.Info().Msg("No echo received yet. The server might not be registered.")
 	}
+}
+
+func handleRegisterServer() {
+	log.Info().Msg("\n--- REGISTER SERVER NODE ---")
+
+	if len(nodes) < 2 {
+		log.Info().Msg("Need at least 2 nodes (1 exit node + 1 server)")
+		return
+	}
+
+	log.Info().Msg("\nAvailable nodes:")
+	for i, addr := range nodeAddrs {
+		log.Info().Msgf("\tNode %d: %s", i+1, addr)
+	}
+
+	log.Info().Msg("\nEnter server node number (not node 1 - the client): ")
+	input, _ := reader.ReadString('\n')
+	input = strings.TrimSpace(input)
+	serverIdx, err := strconv.Atoi(input)
+	if err != nil || serverIdx < 1 || serverIdx > len(nodes) {
+		log.Info().Msg("Invalid node number")
+		return
+	}
+	serverIdx--
+
+	if serverIdx == 0 {
+		log.Info().Msg("Cannot use node 1 as server (it's the client)")
+		return
+	}
+
+	log.Info().Msg("\nEnter exit node number: ")
+	input, _ = reader.ReadString('\n')
+	input = strings.TrimSpace(input)
+	exitIdx, err := strconv.Atoi(input)
+	if err != nil || exitIdx < 1 || exitIdx > len(nodes) {
+		log.Info().Msg("Invalid node number")
+		return
+	}
+	exitIdx-- // Convert to 0-based index
+
+	if exitIdx == serverIdx {
+		log.Info().Msg("Exit node and server node must be different")
+		return
+	}
+
+	log.Info().Msg("\nEnter target address to serve (e.g., example.com:80): ")
+	targetAddr, _ := reader.ReadString('\n')
+	targetAddr = strings.TrimSpace(targetAddr)
+
+	if targetAddr == "" {
+		log.Info().Msg("Empty target address")
+		return
+	}
+
+	log.Info().Msgf("\nRegistering Node %d as server for %s via Exit Node %d...",
+		serverIdx+1, targetAddr, exitIdx+1)
+
+	serverNode := nodes[serverIdx]
+	exitNodeAddr := nodeAddrs[exitIdx]
+
+	err = serverNode.RegisterAsServer(exitNodeAddr, targetAddr)
+	if err != nil {
+		log.Error().Msgf("Failed to register server: %v", err)
+		return
+	}
+
+	servers[nextServID] = serverInfo{
+		nodeIdx:      serverIdx,
+		exitNodeAddr: exitNodeAddr,
+		targetAddr:   targetAddr,
+	}
+
+	log.Info().Msgf("Server #%d registered successfully!", nextServID)
+	log.Info().Msgf("  Node %d will now receive messages sent to %s", serverIdx+1, targetAddr)
+	nextServID++
+
+	time.Sleep(200 * time.Millisecond)
+}
+
+func handleViewClientMessages() {
+	log.Info().Msg("\n--- VIEW CLIENT MESSAGES ---")
+
+	if len(streams) == 0 {
+		log.Info().Msg("No streams available. Create a stream first.")
+		return
+	}
+
+	log.Info().Msg("\nAvailable streams:")
+	for userID, info := range streams {
+		log.Info().Msgf("\tStream #%d -> %s (Circuit #%d)",
+			userID, info.targetAddr, info.userCircID)
+	}
+
+	log.Info().Msg("\nEnter stream number to view messages: ")
+	input, _ := reader.ReadString('\n')
+	input = strings.TrimSpace(input)
+	userStrID, err := strconv.Atoi(input)
+	if err != nil {
+		log.Info().Msg("Invalid stream number")
+		return
+	}
+
+	info, exists := streams[userStrID]
+	if !exists {
+		log.Info().Msg("Stream not found")
+		return
+	}
+
+	client := nodes[0]
+
+	// Get sent packets
+	log.Info().Msg("\nMessages sent by client:")
+	sentPackets, err := client.GetStreamPackets(info.circuitID, info.streamID)
+	if err != nil {
+		log.Error().Msgf("Failed to get sent packets: %v", err)
+	} else if len(sentPackets) == 0 {
+		log.Info().Msg("  (No messages sent yet)")
+	} else {
+		for i, packet := range sentPackets {
+			log.Info().Msgf("  %d. %s", i+1, string(packet))
+		}
+	}
+
+	// Get received packets
+	log.Info().Msg("\nMessages received by client:")
+	receivedPackets, err := client.GetReceivedStreamPackets(info.circuitID, info.streamID)
+	if err != nil {
+		log.Error().Msgf("Failed to get received packets: %v", err)
+	} else if len(receivedPackets) == 0 {
+		log.Info().Msg("  (No messages received yet)")
+	} else {
+		for i, packet := range receivedPackets {
+			log.Info().Msgf("  %d. %s", i+1, string(packet))
+		}
+	}
+}
+
+func handleViewServerMessages() {
+	log.Info().Msg("\n--- VIEW SERVER MESSAGES ---")
+
+	if len(servers) == 0 {
+		log.Info().Msg("No servers registered. Use option 4 to register a server first.")
+		return
+	}
+
+	log.Info().Msg("\nRegistered servers:")
+	for userID, info := range servers {
+		log.Info().Msgf("\tServer #%d: Node %d serving %s (Exit: %s)",
+			userID, info.nodeIdx+1, info.targetAddr, info.exitNodeAddr)
+	}
+
+	log.Info().Msg("\nEnter server number to view messages: ")
+	input, _ := reader.ReadString('\n')
+	input = strings.TrimSpace(input)
+	userServID, err := strconv.Atoi(input)
+	if err != nil {
+		log.Info().Msg("Invalid server number")
+		return
+	}
+
+	info, exists := servers[userServID]
+	if !exists {
+		log.Info().Msg("Server not found")
+		return
+	}
+
+	serverNode := nodes[info.nodeIdx]
+
+	// Get received data from clients
+	log.Info().Msg("\nMessages received by server from clients:")
+	receivedData, err := serverNode.GetServerReceivedData(info.exitNodeAddr)
+	if err != nil {
+		log.Error().Msgf("Failed to get received data: %v", err)
+	} else if len(receivedData) == 0 {
+		log.Info().Msg("  (No messages received yet)")
+	} else {
+		for i, data := range receivedData {
+			log.Info().Msgf("  %d. %s", i+1, string(data))
+		}
+	}
+}
+
+func handleServerSendMessage() {
+	log.Info().Msg("\n--- SEND MESSAGE AS SERVER ---")
+
+	if len(servers) == 0 {
+		log.Info().Msg("No servers registered. Use option 4 to register a server first.")
+		return
+	}
+
+	log.Info().Msg("\nRegistered servers:")
+	for userID, info := range servers {
+		log.Info().Msgf("\tServer #%d: Node %d serving %s (Exit: %s)",
+			userID, info.nodeIdx+1, info.targetAddr, info.exitNodeAddr)
+	}
+
+	log.Info().Msg("\nEnter server number to send from: ")
+	input, _ := reader.ReadString('\n')
+	input = strings.TrimSpace(input)
+	userServID, err := strconv.Atoi(input)
+	if err != nil {
+		log.Info().Msg("Invalid server number")
+		return
+	}
+
+	info, exists := servers[userServID]
+	if !exists {
+		log.Info().Msg("Server not found")
+		return
+	}
+
+	serverNode := nodes[info.nodeIdx]
+
+	// First check if server has received any data
+	log.Info().Msg("\nChecking for received client messages...")
+	receivedData, err := serverNode.GetServerReceivedData(info.exitNodeAddr)
+	if err != nil {
+		log.Error().Msgf("Failed to get received data: %v", err)
+		return
+	}
+
+	if len(receivedData) == 0 {
+		log.Info().Msg("No messages received from clients yet.")
+		log.Info().Msg("The client must send a message first (option 3) to establish the connection.")
+		return
+	}
+
+	log.Info().Msg("Received messages from client:")
+	for i, data := range receivedData {
+		log.Info().Msgf("\tMessage %d: %s", i+1, string(data))
+	}
+
+	log.Info().Msg("\nEnter message to send back to client: ")
+	message, _ := reader.ReadString('\n')
+	message = strings.TrimSpace(message)
+
+	if message == "" {
+		log.Info().Msg("Empty message")
+		return
+	}
+
+	log.Info().Msgf("\nSending message from Server #%d...", userServID)
+	err = serverNode.ServerSendData(info.exitNodeAddr, []byte(message))
+	if err != nil {
+		log.Error().Msgf("Failed to send message: %v", err)
+		return
+	}
+
+	log.Info().Msg("Message sent successfully!")
+	log.Info().Msg("\nTwo-way communication complete!")
+	log.Info().Msg("  The client should now see this message when they check stream packets.")
+
+	time.Sleep(300 * time.Millisecond)
 }
 
 func handleCloseStream() {
@@ -467,8 +759,8 @@ func handleCloseCircuit() {
 	}
 
 	log.Info().Msg("\nAvailable circuits:")
-	for userID, circID := range circuits {
-		log.Info().Msgf("\tCircuit #%d (Internal ID: %d)", userID, circID)
+	for userID, circInfo := range circuits {
+		log.Info().Msgf("\tCircuit #%d (Internal ID: %d)", userID, circInfo.circID)
 	}
 
 	log.Info().Msg("\nEnter circuit number to close: ")
@@ -480,45 +772,19 @@ func handleCloseCircuit() {
 		return
 	}
 
-	circID, exists := circuits[userCircID]
+	circInfo, exists := circuits[userCircID]
 	if !exists {
 		log.Info().Msg("Circuit not found")
 		return
 	}
 
-	// Check if there are streams on this circuit
-	streamsOnCircuit := []int{}
-	for strID, info := range streams {
-		if info.userCircID == userCircID {
-			streamsOnCircuit = append(streamsOnCircuit, strID)
-		}
-	}
+	// Close streams and unregister servers if needed
+	closeStreamsAndServersForCircuit(userCircID, circInfo)
 
-	if len(streamsOnCircuit) > 0 {
-		log.Warn().Msgf("Warning: Circuit #%d has %d open stream(s)", userCircID, len(streamsOnCircuit))
-		log.Info().Msg("Close them first? (y/n): ")
-		confirm, _ := reader.ReadString('\n')
-		confirm = strings.TrimSpace(strings.ToLower(confirm))
-
-		if confirm == "y" || confirm == "yes" {
-			for _, strID := range streamsOnCircuit {
-				info := streams[strID]
-				client := nodes[0]
-				err := client.CloseStream(info.circuitID, info.streamID)
-				if err != nil {
-					log.Error().Msgf("Failed to close stream #%d: %v", strID, err)
-				} else {
-					log.Info().Msgf("  ✓ Closed stream #%d", strID)
-				}
-				delete(streams, strID)
-			}
-			time.Sleep(200 * time.Millisecond)
-		}
-	}
-
+	// Destroy the circuit
 	log.Info().Msgf("\nDestroying circuit #%d...", userCircID)
 	client := nodes[0]
-	err = client.DestroyCircuit(circID)
+	err = client.DestroyCircuit(circInfo.circID)
 	if err != nil {
 		log.Error().Msgf("Failed to destroy circuit: %v", err)
 		return
@@ -530,26 +796,170 @@ func handleCloseCircuit() {
 	time.Sleep(200 * time.Millisecond)
 }
 
+func closeStreamsAndServersForCircuit(userCircID int, circInfo circuitInfo) {
+	// Check if there are streams on this circuit
+	streamsOnCircuit := findStreamsOnCircuit(userCircID)
+	closeStreamsIfConfirmed(userCircID, streamsOnCircuit)
+
+	// Check if there are servers using this circuit's exit node
+	exitNodeAddr := circInfo.hops[2]
+	serversOnExit := findServersOnExitNode(exitNodeAddr)
+	unregisterServersIfConfirmed(exitNodeAddr, serversOnExit)
+}
+
+func findStreamsOnCircuit(userCircID int) []int {
+	streamsOnCircuit := []int{}
+	for strID, info := range streams {
+		if info.userCircID == userCircID {
+			streamsOnCircuit = append(streamsOnCircuit, strID)
+		}
+	}
+	return streamsOnCircuit
+}
+
+func findServersOnExitNode(exitNodeAddr string) []int {
+	serversOnExit := []int{}
+	for servID, info := range servers {
+		if info.exitNodeAddr == exitNodeAddr {
+			serversOnExit = append(serversOnExit, servID)
+		}
+	}
+	return serversOnExit
+}
+
+func closeStreamsIfConfirmed(userCircID int, streamsOnCircuit []int) {
+	if len(streamsOnCircuit) == 0 {
+		return
+	}
+
+	log.Warn().Msgf("Warning: Circuit #%d has %d open stream(s)", userCircID, len(streamsOnCircuit))
+	log.Info().Msg("Close them first? (y/n): ")
+	confirm, _ := reader.ReadString('\n')
+	confirm = strings.TrimSpace(strings.ToLower(confirm))
+
+	if confirm == "y" || confirm == "yes" {
+		for _, strID := range streamsOnCircuit {
+			info := streams[strID]
+			client := nodes[0]
+			err := client.CloseStream(info.circuitID, info.streamID)
+			if err != nil {
+				log.Error().Msgf("Failed to close stream #%d: %v", strID, err)
+			} else {
+				log.Info().Msgf("Closed stream #%d", strID)
+			}
+			delete(streams, strID)
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+}
+
+func unregisterServersIfConfirmed(exitNodeAddr string, serversOnExit []int) {
+	if len(serversOnExit) == 0 {
+		return
+	}
+
+	log.Warn().Msgf("Warning: %d server(s) are registered with Exit Node %d",
+		len(serversOnExit), getNodeNumber(exitNodeAddr))
+	log.Info().Msg("Unregister them? (y/n): ")
+	confirm, _ := reader.ReadString('\n')
+	confirm = strings.TrimSpace(strings.ToLower(confirm))
+
+	if confirm == "y" || confirm == "yes" {
+		for _, servID := range serversOnExit {
+			info := servers[servID]
+			log.Info().Msgf("Unregistering Server #%d (Node %d serving %s)",
+				servID, info.nodeIdx+1, info.targetAddr)
+			delete(servers, servID)
+		}
+		log.Info().Msg("Servers unregistered from local tracking.")
+		time.Sleep(200 * time.Millisecond)
+	}
+}
+
+func getNodeNumber(addr string) int {
+	for i, nodeAddr := range nodeAddrs {
+		if nodeAddr == addr {
+			return i + 1 // Node numbering starts from 1
+		}
+	}
+	return -1 // Should not happen
+}
+
 func handleShowStatus() {
 	log.Info().Msg("\n--- SYSTEM STATUS ---")
 	log.Info().Msgf("Total nodes: %d", len(nodes))
 	log.Info().Msgf("Active circuits: %d", len(circuits))
 	log.Info().Msgf("Active streams: %d", len(streams))
+	log.Info().Msgf("Registered servers: %d", len(servers))
 
 	if len(circuits) > 0 {
 		log.Info().Msg("\nCircuits:")
-		for userID, circID := range circuits {
-			log.Info().Msgf("\tCircuit #%d (Internal ID: %d)", userID, circID)
+		for userID, circInfo := range circuits {
+			guardNode := getNodeNumber(circInfo.hops[0])
+			middleNode := getNodeNumber(circInfo.hops[1])
+			exitNode := getNodeNumber(circInfo.hops[2])
+			log.Info().Msgf("\tCircuit #%d: Client → Node %d → Node %d → Node %d (Internal ID: %d)",
+				userID, guardNode, middleNode, exitNode, circInfo.circID)
 		}
 	}
 
 	if len(streams) > 0 {
 		log.Info().Msg("\nStreams:")
 		for userID, info := range streams {
-			log.Info().Msgf("\tStream #%d (Circuit #%d, Internal Stream ID: %d)",
-				userID, info.userCircID, info.streamID)
+			log.Info().Msgf("\tStream #%d -> %s (Circuit #%d, Internal Stream ID: %d)",
+				userID, info.targetAddr, info.userCircID, info.streamID)
 		}
 	}
+
+	if len(servers) > 0 {
+		log.Info().Msg("\nServers:")
+		for userID, info := range servers {
+			exitNodeNum := getNodeNumber(info.exitNodeAddr)
+			log.Info().Msgf("\tServer #%d: Exit Node %d ← Server Node %d serving %s",
+				userID, exitNodeNum, info.nodeIdx+1, info.targetAddr)
+		}
+	}
+}
+
+func handleUnregisterServer() {
+	log.Info().Msg("\n--- UNREGISTER SERVER ---")
+
+	if len(servers) == 0 {
+		log.Info().Msg("No servers registered.")
+		return
+	}
+
+	log.Info().Msg("\nRegistered servers:")
+	for userID, info := range servers {
+		exitNodeNum := getNodeNumber(info.exitNodeAddr)
+		log.Info().Msgf("\tServer #%d: Node %d serving %s (Exit: Node %d)",
+			userID, info.nodeIdx+1, info.targetAddr, exitNodeNum)
+	}
+
+	log.Info().Msg("\nEnter server number to unregister: ")
+	input, _ := reader.ReadString('\n')
+	input = strings.TrimSpace(input)
+	userServID, err := strconv.Atoi(input)
+	if err != nil {
+		log.Info().Msg("Invalid server number")
+		return
+	}
+
+	info, exists := servers[userServID]
+	if !exists {
+		log.Info().Msg("Server not found")
+		return
+	}
+
+	log.Info().Msgf("\nUnregistering Server #%d (Node %d serving %s via Exit Node %d)...",
+		userServID, info.nodeIdx+1, info.targetAddr, getNodeNumber(info.exitNodeAddr))
+
+	delete(servers, userServID)
+	log.Info().Msgf("Server #%d unregistered successfully!", userServID)
+	log.Info().Msg("Note: This only removes the local tracking. " +
+		"The server node may continue to receive traffic from the exit node.")
+
+	time.Sleep(200 * time.Millisecond)
 }
 
 func cleanupNodes() {

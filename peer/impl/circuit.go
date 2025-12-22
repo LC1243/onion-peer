@@ -2545,7 +2545,32 @@ func (n *node) HandleRelayData(relay RelayCell, circ *Circuit) error {
 		Uint16("circID", circ.InCircID).
 		Uint16("streamID", relay.StreamID).
 		Int("dataLen", len(relay.Data)).
-		Msg("Stored received data, sending reply back to client")
+		Msg("Stored received data at exit node")
+
+	// Check if there's a server registered for this stream's target address
+	stream.mu.Lock()
+	targetAddr := stream.TargetAddr
+	stream.mu.Unlock()
+
+	n.serverConnectionsMu.RLock()
+	serverAddr, hasServer := n.serverConnections[targetAddr]
+	n.serverConnectionsMu.RUnlock()
+
+	if hasServer {
+		// Forward data to the server
+		n.log.Info().
+			Uint16("circID", circ.InCircID).
+			Uint16("streamID", relay.StreamID).
+			Str("serverAddr", serverAddr).
+			Str("targetAddr", targetAddr).
+			Msg("Forwarding data to server")
+
+		err = n.forwardDataToServer(circ.InCircID, relay.StreamID, targetAddr, relay.Data, serverAddr)
+		if err != nil {
+			n.log.Error().Err(err).Msg("Failed to forward data to server")
+			// Continue to send echo reply as fallback
+		}
+	}
 
 	// Send reply asynchronously
 	n.sendReplyAsync(circ, relay, stream)

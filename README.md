@@ -5,7 +5,7 @@ Built on top of the homework solutions from Louis Chapuis for the CS-438 course 
 
 ## AI usage
 
-AI was used to refactor a lot of the code, to add comments, and for debugging.
+AI was used to refactor a lot of the code, add comments and debugging.
 ## Run the tests
 
 To run all the `Tor-related` tests (unit and integration), run: 
@@ -57,35 +57,10 @@ firefox peer_coverage.html
 
 ## CLI
 
-To run our CLI, you can execute the following command: 
+For an interactive command-line interface to demonstrate the Tor-like onion routing system:
 
 ```sh
-cli-run
+make cli-run
 ```
 
-You will be presented with the following menu, in which you can run our system:
-```
-==============================================
- Welcome To TOR! Let's Keep You Anonymous!
-==============================================
-
-Enter number of nodes to create (minimum 4): 
-```
-
-After choosing the number of nodes, you will be presented with the main menu and the available commands:
-
-```
-==============================================
-  MAIN MENU
-==============================================
-1. Create a new circuit
-2. Create a new stream
-3. Send a message
-4. Close a stream
-5. Close a circuit
-6. Show status
-7. Exit
-==============================================
-Choose an option (1-7):
-```
-
+See the [CLI README](cli/README.md) for detailed usage instructions and example scenarios.
