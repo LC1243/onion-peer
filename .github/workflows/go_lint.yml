@@ -5,8 +5,7 @@ on:
 
 jobs:
   lint:
-    runs-on:
-      group: ubuntu-latest
+    runs-on: ubuntu-latest
     steps:
       - name: Use Go = 1.23
         uses: actions/setup-go@v3
