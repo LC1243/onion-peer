@@ -1,7 +1,14 @@
 # Onion Peer
 
-Project for the "Decentralized System Engineering" course.
-Built on top of the homework solutions from Louis Chapuis for the CS-438 course (Homework 0 and 1).
+An implementation of **Tor-inspired onion routing** built on top of Peerster, developed as the group project for the **CS-438: Decentralized Systems Engineering** course at EPFL.
+
+The project explores the design and implementation of a decentralized anonymous communication system based on the ideas presented in:
+
+> R. Dingledine, N. Mathewson, and P. Syverson, *[Tor: The Second-Generation Onion Router](https://www.usenix.org/conference/13th-usenix-security-symposium/tor-second-generation-onion-router)*, USENIX Security Symposium, 2004.
+
+The system implements onion routing over the Peerster network, allowing messages to be routed through multiple intermediate nodes using layered encryption. The implementation includes **circuits and streams, rate limiting, fairness and congestion control, and rendezvous-based communication**.
+
+The project also provides an interactive CLI for demonstrating the onion-routing functionality.
 
 ## AI usage
 
@@ -64,3 +71,17 @@ make cli-run
 ```
 
 See the [CLI README](cli/README.md) for detailed usage instructions and example scenarios.
+
+## Project Background
+
+This project was developed as part of the **CS-438 Decentralized Systems Engineering** group project at EPFL.
+
+The course project required students to build a decentralized or distributed system on top of Peerster, based on existing research literature, and to design a corresponding testing and performance-evaluation methodology.
+
+For the **Secure Routing** project track, the objective was to implement onion routing and Tor on top of Peerster and integrate it with Peerster's private-messaging functionality. The project specification identifies the following main components:
+
+- Circuits and streams
+- Rate limiting, fairness, and congestion control
+- Rendezvous points and hidden services
+- Unit and integration testing
+- Performance evaluation based on circuit length, latency, throughput, and congestion/rate-limiting overhead
